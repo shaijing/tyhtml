@@ -1,60 +1,60 @@
 {
-  "name": "tyhtml",
-  "version": "0.1.0",
-  "description": "TODO: replace with a one-line description of tyhtml",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "TODO: replace with your git repo URL (e.g. https://github.com/you/tyhtml.git)"
-  },
-  "author": "TODO: replace with your name <email>",
-  "keywords": [
-    "napi-rs",
-    "native",
-    "node-addon"
-  ],
-  "main": "index.js",
-  "module": "index.js",
-  "type": "module",
-  "types": "./index.d.ts",
-  "engines": {
-    "node": ">= 14"
-  },
-  "files": [
-    "index.js",
-    "index.d.ts"
-  ],
-  "optionalDependencies": {
-    "tyhtml-win32-x64-msvc": "0.1.0",
-    "tyhtml-linux-x64-gnu": "0.1.0"
-  },
-  "napi": {
-    "binaryName": "tyhtml",
-    "targets": [
-      "x86_64-pc-windows-msvc",
-      "x86_64-unknown-linux-gnu"
-    ]
-  },
-  "scripts": {
-    "build": "napi build --platform --esm --release",
-    "build:debug": "napi build --platform --esm",
-    "build:linux-x64-gnu": "napi build --platform --esm --release --target x86_64-unknown-linux-gnu --cross-compile",
-    "build:darwin-x64": "napi build --platform --esm --release --target x86_64-apple-darwin --cross-compile",
-    "build:darwin-arm64": "napi build --platform --esm --release --target aarch64-apple-darwin --cross-compile",
-    "build:all": "npm run build && npm run build:linux-x64-gnu",
-    "create-npm-dirs": "napi create-npm-dirs",
-    "artifacts": "napi artifacts --output-dir .",
-    "prepublishOnly": "npm run build:all && npm run create-npm-dirs && npm run artifacts"
-  },
-  "devDependencies": {
-    "@napi-rs/cross-toolchain": "^1.0.0",
-    "@types/bun": "latest",
-    "typescript": "^5.9.3"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@napi-rs/cli": "^3.7.2"
-  }
+    "name": "tyhtml",
+    "version": "0.1.0",
+    "description": "TODO: replace with a one-line description of tyhtml",
+    "license": "MIT",
+    "author": "Ling Yu <yulingsc@outlook.com>",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/shaijing/tyhtml.git"
+    },
+    "keywords": [
+        "napi-rs",
+        "native",
+        "node-addon"
+    ],
+    "main": "index.js",
+    "module": "index.js",
+    "type": "module",
+    "types": "./index.d.ts",
+    "engines": {
+        "node": ">= 14"
+    },
+    "files": [
+        "index.js",
+        "index.d.ts"
+    ],
+    "optionalDependencies": {
+        "tyhtml-win32-x64-msvc": "0.1.0",
+        "tyhtml-linux-x64-gnu": "0.1.0"
+    },
+    "napi": {
+        "binaryName": "tyhtml",
+        "targets": [
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu"
+        ]
+    },
+    "scripts": {
+        "build": "napi build --platform --esm --release",
+        "build:debug": "napi build --platform --esm",
+        "build:linux-x64-gnu": "napi build --platform --esm --release --target x86_64-unknown-linux-gnu --cross-compile",
+        "build:darwin-x64": "napi build --platform --esm --release --target x86_64-apple-darwin --cross-compile",
+        "build:darwin-arm64": "napi build --platform --esm --release --target aarch64-apple-darwin --cross-compile",
+        "build:all": "npm run build && npm run build:linux-x64-gnu",
+        "create-npm-dirs": "napi create-npm-dirs",
+        "artifacts": "napi artifacts --output-dir .",
+        "prepublishOnly": "npm run build:all && npm run create-npm-dirs && npm run artifacts"
+    },
+    "devDependencies": {
+        "@napi-rs/cross-toolchain": "^1.0.0",
+        "@types/bun": "latest",
+        "typescript": "^5.9.3"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@napi-rs/cli": "^3.7.2"
+    }
 }
