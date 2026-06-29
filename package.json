@@ -24,6 +24,9 @@
         "node": ">= 14"
     },
     "packageManager": "bun@1.4.0",
+    "publishConfig": {
+        "access": "public"
+    },
     "files": [
         "index.js",
         "index.d.ts"
@@ -52,6 +55,7 @@
         "build:darwin-x64": "napi build --platform --esm --release --target x86_64-apple-darwin --cross-compile",
         "build:all": "npm run build && npm run build:linux-x64-gnu && npm run build:darwin-arm64 && npm run build:darwin-x64",
         "create-npm-dirs": "napi create-npm-dirs",
+        "postcreate-npm-dirs": "node scripts/patch-npm-dirs.mjs",
         "artifacts": "napi artifacts --output-dir .",
         "prepublishOnly": "npm run build:all && npm run create-npm-dirs && npm run artifacts"
     },
