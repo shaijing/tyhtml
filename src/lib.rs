@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use napi::bindgen_prelude::*;
@@ -7,14 +8,67 @@ use typst::diag::{FileError, FileResult, Warned};
 use typst::foundations::{Bytes, Datetime, Duration, Label, Repr, Value};
 use typst::introspection::Introspector;
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
-use typst::text::{Font, FontBook};
+use typst::text::{Font, FontBook, FontInfo};
 use typst::utils::LazyHash;
 use typst::{Feature, Features, Library, LibraryExt, World};
 use typst_html::{HtmlDocument, HtmlOptions};
 use typst_kit::datetime::Time;
 use typst_kit::files::{FileLoader, FileStore, FsRoot};
-use typst_kit::fonts::FontStore;
+use typst_kit::fonts::{FontPath, FontSource, FontStore};
 use typst_utils::PicoStr;
+
+// ── Process-wide caches ───────────────────────────────────────────────
+//
+// `Library` is essentially static for our purposes — we only ever enable
+// the `Html` feature, with no per-call feature variation — so rebuilding
+// it on every `compileTypst` call is pure waste.
+//
+// `typst-kit` font discovery walks `/Library/Fonts`, `/usr/share/fonts`,
+// and friends. On macOS the first call can take 200–500 ms; the result is
+// effectively immutable for the lifetime of the process, so cache it.
+//
+// Both caches are bounded to the configured feature set / system font
+// set; per-call `fontPaths` are layered on top, see `BridgeWorld::new`.
+
+static LIBRARY: OnceLock<LazyHash<Library>> = OnceLock::new();
+
+/// System font entries cached for the lifetime of the process.
+///
+/// We cache `(CachedFontPath, FontInfo)` pairs (the public surface of
+/// `typst_kit::fonts::system()`) rather than `FontSlot` (private to
+/// `FontStore`) or a `FontStore` itself (`FontStore` is not `Clone`,
+/// `FontPath` is not `Clone`, and `Arc<T>: FontSource` is not
+/// blanket-impl'd by `typst-kit`). The `CachedFontPath` newtype bridges
+/// that gap: it owns an `Arc<FontPath>`, is itself `Clone` (refcount
+/// bump), and delegates `load` to the inner `FontPath`. Per call we
+/// clone the cached slice and extend a fresh `FontStore`, avoiding
+/// the multi-hundred-millisecond filesystem scan that
+/// `typst_kit::fonts::system()` performs on first call.
+#[derive(Clone)]
+struct CachedFontPath(Arc<FontPath>);
+
+impl FontSource for CachedFontPath {
+    fn load(&self) -> Option<Font> {
+        self.0.load()
+    }
+}
+
+static SYSTEM_FONT_ENTRIES: OnceLock<Vec<(CachedFontPath, FontInfo)>> = OnceLock::new();
+
+fn library() -> &'static LazyHash<Library> {
+    LIBRARY.get_or_init(|| {
+        let features = Features::from_iter(std::iter::once(Feature::Html));
+        LazyHash::new(Library::builder().with_features(features).build())
+    })
+}
+
+fn system_font_entries() -> &'static [(CachedFontPath, FontInfo)] {
+    SYSTEM_FONT_ENTRIES.get_or_init(|| {
+        typst_kit::fonts::system()
+            .map(|(p, i)| (CachedFontPath(Arc::new(p)), i))
+            .collect()
+    })
+}
 
 // ── JS-facing types ────────────────────────────────────────────────────
 
@@ -60,12 +114,11 @@ struct BridgeFiles {
 }
 
 impl BridgeFiles {
-    fn new(root: PathBuf, main_path: &Path) -> Result<Self> {
-        let abs = main_path
-            .canonicalize()
-            .context("Cannot resolve main file path")?;
-
-        let vpath = VirtualPath::virtualize(&root, &abs)
+    fn new(root: PathBuf, main_abs: PathBuf) -> Result<Self> {
+        // `main_abs` must already be canonicalized by the caller — running
+        // `Path::canonicalize` here would duplicate work done in
+        // `BridgeWorld::new` and on Windows it touches the filesystem.
+        let vpath = VirtualPath::virtualize(&root, &main_abs)
             .map_err(|e| anyhow::anyhow!("Failed to virtualize path: {e}"))?;
         let main = RootedPath::new(VirtualRoot::Project, vpath).intern();
 
@@ -159,7 +212,11 @@ fn typst_cache_dir() -> PathBuf {
 // ── World ──────────────────────────────────────────────────────────────
 
 struct BridgeWorld {
-    library: LazyHash<Library>,
+    /// Borrowed from the process-wide `LIBRARY` cache — see module-level docs.
+    library: &'static LazyHash<Library>,
+    /// Owned per call: cloned from the cached system store (cheap, Arc bumps
+    /// + a small `Vec<FontInfo>`) and then extended with any caller-supplied
+    /// `fontPaths`.
     fonts: FontStore,
     files: FileStore<BridgeFiles>,
     now: Time,
@@ -175,23 +232,23 @@ impl BridgeWorld {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        // Build the library with HTML feature enabled.
-        let features = Features::from_iter(std::iter::once(Feature::Html));
-        let library = Library::builder().with_features(features).build();
-
-        // Discover fonts.
-        let mut font_store = FontStore::new();
-        font_store.extend(typst_kit::fonts::system());
+        // Start from the cached system fonts and layer caller-supplied
+        // font directories on top. Per-call cost is `O(n_system_fonts)`
+        // Arc refcount bumps plus the `FontStore::extend` book rebuild,
+        // which is microseconds — much cheaper than re-scanning the
+        // system font directories (200–500 ms on macOS).
+        let mut fonts = FontStore::new();
+        fonts.extend(system_font_entries().iter().cloned());
         for path in font_paths {
-            font_store.extend(typst_kit::fonts::scan(path));
+            fonts.extend(typst_kit::fonts::scan(path));
         }
 
-        let files = BridgeFiles::new(root, &abs)?;
+        let files = BridgeFiles::new(root, abs)?;
         let now = Time::system();
 
         Ok(Self {
-            library: LazyHash::new(library),
-            fonts: font_store,
+            library: library(),
+            fonts,
             files: FileStore::new(files),
             now,
         })
