@@ -55,34 +55,46 @@ The following are gitignored (`/target`, `node_modules/`, `/npm`, `/index.js`, `
 
 ## 3. Architecture
 
-`src/lib.rs` defines the entire Rust side. Key pieces:
+`src/lib.rs` defines the entire Rust side. Key pieces, in the order they appear in the file:
 
-- **`BridgeWorld`** — implements `typst::World`. Wraps `Library` (built with `Feature::Html`), a `FontStore` (system fonts + any extra `fontPaths`), and a `FileStore` backed by `BridgeFiles`. Owns `now: Time` so `today()` works.
+- **Process-wide caches** (top of file) — `static LIBRARY: OnceLock<LazyHash<Library>>` and `static SYSTEM_FONT_ENTRIES: OnceLock<Vec<(CachedFontPath, FontInfo)>>`. Both are populated lazily on first access and survive for the lifetime of the process.
+- **`CachedFontPath`** — newtype around `Arc<FontPath>` with a hand-rolled `FontSource` impl. Needed because `FontSlot` is private to `FontStore`, `FontStore` and `FontPath` are not `Clone`, and `typst-kit` does not blanket-impl `FontSource` for `Arc<T>`. Cloning is a refcount bump.
+- **JS-facing types** — `TyHtmlOptions` (constructor), `CompileOptions` (per-call), `CompileWarning`, `CompileResult`. `CompileOptions::flatten_or_default` produces an internal `FlattenedOptions` with every `Option` resolved.
 - **`BridgeFiles`** — `FileLoader` that resolves project files from a real `FsRoot`, plus package files from `~/Library/Application Support/typst/packages` (macOS) / `%LOCALAPPDATA%\typst\packages` (Windows) / `~/.local/share/typst/packages` (Linux).
-- **`run_compile`** — pure function: build the world → `typst::compile::<HtmlDocument>` → `typst_html::html` → optional `extract_body` → optional `extract_metadata`. Returns `Result<CompileResult>`.
+- **`BridgeWorld`** — implements `typst::World`. Built by `BridgeWorld::from_parts(input_abs, library, fonts)` (note: takes an **already-canonicalized** path, an already-built `FontStore`, and a borrowed `&'static LazyHash<Library>`). Owns `now: Time` so `today()` works.
 - **`extract_metadata`** — queries the introspector for a `<meta>` label, reads its `value` field, recursively converts `typst::Value` → `serde_json::Value`, serializes to a JSON string.
 - **`extract_body`** — naive string search for `<body…>` and `</body>`; not regex, not a real parser.
-- **JS entry points**:
-  - `compile_typst` (async, `#[napi]`) — wraps `compile_typst_impl`, which moves blocking work onto `napi::tokio::task::spawn_blocking` so the event loop stays free.
-  - `compile_typst_sync` (sync, `#[napi]`) — calls `run_compile` directly on the calling thread.
-  - Both share the option-flattening preamble; `compile_typst_impl` was extracted from the original `compile_typst` body to keep the two entry points in sync.
+- **`TyHtml` class** (the only JS export) — owns the `&'static LazyHash<Library>` borrow and an `Arc<Vec<(CachedFontPath, FontInfo)>>` of the base font set built at construction time. Two methods:
+  - `compile` (async, `#[napi]`) — moves blocking work onto `napi::tokio::task::spawn_blocking` so the event loop stays free. Clones the `Arc` of base entries into the worker, extends with any per-call `fontPaths`, canonicalizes the input, builds `BridgeWorld`, runs `run_compile_with_world`.
+  - `compileSync` (sync, `#[napi]`) — same pipeline inline on the calling thread.
+- **`run_compile_with_world`** — pure function: `typst::compile::<HtmlDocument>` → `typst_html::html` → optional `extract_body` → optional `extract_metadata`. Returns `Result<CompileResult>`. Shared by both class methods.
 
 ### Mental model
 
 ```
-JS thread                 worker thread                 typst
-─────────                 ─────────────                 ──────
-compileTypst ──┐
-               │ spawn_blocking ──► run_compile ──► BridgeWorld::new
-               │                                    │
-compileTypstSync ───────────────► run_compile ──► typst::compile::<HtmlDocument>
-                                                    ↓
-                                              typst_html::html
-                                                    ↓
-                                       (extract_body / extract_metadata)
-                                                    ↓
-                                              CompileResult
+JS thread                                 worker thread                          typst
+─────────                                 ─────────────                          ──────
+new TyHtml(opts) ─► once: scan constructor fontPaths, build base font entries
+                    (system entries cached process-wide)
+                                  │
+engine.compile(input, opts) ──┐   │ spawn_blocking ──► build FontStore (clone
+                                │   │                    Arc<base_entries> +
+                                │   │                    extend per-call paths)
+                                │   │                  ► canonicalize input
+                                │   │                  ► BridgeWorld::from_parts
+                                │   │                  ► run_compile_with_world
+                                │   │                       │
+                                │   │                       ▼
+                                │   │                  typst::compile::<HtmlDocument>
+                                │   │                       │
+                                │   ▼                       ▼ (back on JS thread
+                                ▼                            via .await)
+                          Promise<CompileResult>
+                                  │
+engine.compileSync(input, opts) ─────► same pipeline, inline on caller thread
 ```
+
+Per-instance state (`base_font_entries`) means the system-font scan runs at most once per **instance** — and the system entries themselves are `OnceLock`-cached process-wide, so across instances the scan runs at most once per **process**. Per-call work is dominated by `typst::compile` itself; everything around it is microseconds.
 
 ---
 
@@ -169,14 +181,17 @@ Anything that changes the JS surface lives in `src/lib.rs`. After editing:
 
 | Rust | JS |
 |---|---|
-| `compile_typst` | `compileTypst` |
-| `compile_typst_sync` | `compileTypstSync` |
-| `body_only` | `bodyOnly` |
-| `no_metadata` | `noMetadata` |
-| `metadata_label` | `metadataLabel` |
-| `font_paths` | `fontPaths` |
+| `TyHtml::new` (constructor) | `new TyHtml()` |
+| `TyHtml::compile` | `engine.compile()` |
+| `TyHtml::compile_sync` | `engine.compileSync()` |
+| `TyHtmlOptions::font_paths` | `fontPaths` (constructor arg) |
+| `CompileOptions::body_only` | `bodyOnly` |
+| `CompileOptions::pretty` | `pretty` |
+| `CompileOptions::no_metadata` | `noMetadata` |
+| `CompileOptions::metadata_label` | `metadataLabel` |
+| `CompileOptions::font_paths` | `fontPaths` (per-call arg) |
 
-`CompileOptions` is `Option<…>` everywhere with `unwrap_or`/`unwrap_or_else` defaults applied in Rust — never force the JS caller to send a value.
+`TyHtmlOptions` and `CompileOptions` are `Option<…>` everywhere with `unwrap_or`/`unwrap_or_else` defaults applied via `CompileOptions::flatten_or_default` — never force the JS caller to send a value. The two `fontPaths` fields are deliberately separate: the constructor one is the **base** set (scanned exactly once); the per-call one is an **extension** layered on top.
 
 ---
 
@@ -192,10 +207,11 @@ Anything that changes the JS surface lives in `src/lib.rs`. After editing:
 
 ## 8. Common pitfalls
 
-- **`BridgeWorld::new` calls `canonicalize()` on the input path** — if the caller passes a relative path or a symlink that doesn't resolve, the function errors with `"Cannot resolve input file path"`. Surface this clearly; do not silently fall back.
-- **`typst-kit` font discovery is platform-specific** — `typst_kit::fonts::system()` returns different sets on each OS. If a user reports "missing font" bugs, ask which platform first.
+- **`canonicalize()` happens at the class boundary, not inside `BridgeWorld`** — both `TyHtml::compile` and `compileSync` canonicalize the input path before calling `BridgeWorld::from_parts`. If the caller passes a relative path or a symlink that doesn't resolve, the error surfaces as `"Cannot resolve input file path"` from the class method, not from `from_parts`. Do not silently fall back.
+- **`typst-kit` font discovery is platform-specific** — `typst_kit::fonts::system()` returns different sets on each OS. If a user reports "missing font" bugs, ask which platform first. The process-wide cache means the scan runs at most once per process, even with multiple `TyHtml` instances.
 - **`extract_body` is naive string search** — it does not understand attributes on `<body>` (e.g. `<body class="...">` is handled, but malformed nesting is not). Don't extend it; replace it with a real HTML parser if a stronger guarantee is ever needed.
-- **Worker thread blocking** — `compile_typst` already moves work off the JS thread via `spawn_blocking`. Do not add a sync path that bypasses this without an explicit reason; the sync entrypoint (`compile_typst_sync`) is the only sanctioned blocking variant.
+- **Worker thread blocking** — `TyHtml::compile` already moves work off the JS thread via `spawn_blocking`. Do not add a sync path that bypasses this without an explicit reason; `compileSync` is the only sanctioned blocking variant.
+- **Per-call `fontPaths` is a fresh scan** — anything passed via `CompileOptions.fontPaths` is `typst_kit::fonts::scan`'d on every call (per-call directories are not cached on the instance). Move directories that don't change at runtime into the `TyHtmlOptions.fontPaths` constructor arg instead, where they're scanned exactly once.
 - **Optional dependencies** — adding a new platform target means publishing a new npm sub-package first, otherwise `bun install` on that platform silently skips the binary and the import throws at runtime.
 - **`packageManager` field** — keep it pinned (`bun@1.4.0` today). Corepack and other tooling will refuse to install if the lockfile was produced by a different version.
 
@@ -205,10 +221,12 @@ Anything that changes the JS surface lives in `src/lib.rs`. After editing:
 
 | You want to… | Look at |
 |---|---|
-| Change the compile options | `src/lib.rs` → `CompileOptions` struct + option-flattening blocks in `compile_typst_impl` and `compile_typst_sync` |
-| Change HTML output shape | `src/lib.rs` → `run_compile` (after `typst_html::html`) and `extract_body` |
+| Change the per-call compile options | `src/lib.rs` → `CompileOptions` struct + `CompileOptions::flatten_or_default` |
+| Change the constructor options | `src/lib.rs` → `TyHtmlOptions` struct + `TyHtml::new` |
+| Add a new method on `TyHtml` | `src/lib.rs` → `// ── TyHtml class ──` section + `run_compile_with_world` |
+| Change HTML output shape | `src/lib.rs` → `run_compile_with_world` (after `typst_html::html`) and `extract_body` |
 | Change metadata schema | `src/lib.rs` → `extract_metadata` and `value_to_json` |
+| Change the cache strategy (Library / fonts) | `src/lib.rs` → `// ── Process-wide caches ──` section (`static LIBRARY`, `static SYSTEM_FONT_ENTRIES`, `CachedFontPath`) |
 | Add a new platform | `package.json` (`napi.targets`, `optionalDependencies`, `scripts`) + this file's §4 |
-| Add a new JS entry point | `src/lib.rs` → `// ── JS entry point ──` section + README "Usage" |
 | Update tests | `tests/test.ts` + `tests/fixtures/*.typ` |
 | Understand historical decisions | `docs/review-findings.md` |

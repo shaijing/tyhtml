@@ -21,14 +21,15 @@ use typst_utils::PicoStr;
 //
 // `Library` is essentially static for our purposes — we only ever enable
 // the `Html` feature, with no per-call feature variation — so rebuilding
-// it on every `compileTypst` call is pure waste.
+// it on every `compile` call is pure waste.
 //
 // `typst-kit` font discovery walks `/Library/Fonts`, `/usr/share/fonts`,
 // and friends. On macOS the first call can take 200–500 ms; the result is
 // effectively immutable for the lifetime of the process, so cache it.
 //
 // Both caches are bounded to the configured feature set / system font
-// set; per-call `fontPaths` are layered on top, see `BridgeWorld::new`.
+// set; per-instance and per-call `fontPaths` are layered on top inside
+// `TyHtml::new` / `TyHtml::compile` / `TyHtml::compileSync`.
 
 static LIBRARY: OnceLock<LazyHash<Library>> = OnceLock::new();
 
@@ -72,7 +73,20 @@ fn system_font_entries() -> &'static [(CachedFontPath, FontInfo)] {
 
 // ── JS-facing types ────────────────────────────────────────────────────
 
-/// Options for `compileTypst`.
+/// Options for the [`TyHtml`] constructor.
+///
+/// These are scanned exactly once, at construction time, and merged with the
+/// system font set on the instance. Per-call font additions live on
+/// [`CompileOptions::font_paths`].
+#[napi(object)]
+pub struct TyHtmlOptions {
+    /// Extra font directories to scan at construction time (in addition to
+    /// the system font set). Each is scanned exactly once; the resulting
+    /// entries are stored on the instance.
+    pub font_paths: Option<Vec<String>>,
+}
+
+/// Options for a single `compile` / `compileSync` call.
 #[napi(object)]
 pub struct CompileOptions {
     /// Strip everything outside `<body>…</body>` (no `<!DOCTYPE>`, `<html>`, `<head>`).
@@ -83,7 +97,8 @@ pub struct CompileOptions {
     pub no_metadata: Option<bool>,
     /// Label to query for metadata. Defaults to `"meta"`.
     pub metadata_label: Option<String>,
-    /// Additional directories to scan for fonts (can be repeated).
+    /// Additional font directories for *this call only*, layered on top of
+    /// the [`TyHtmlOptions::font_paths`] registered at construction time.
     pub font_paths: Option<Vec<String>>,
 }
 
@@ -104,6 +119,41 @@ pub struct CompileResult {
     pub html: String,
     pub metadata: Option<String>,
     pub warnings: Vec<CompileWarning>,
+}
+
+/// Compile options with all `Option`s resolved to concrete values.
+struct FlattenedOptions {
+    body_only: bool,
+    pretty: bool,
+    no_metadata: bool,
+    label_name: String,
+    extra_font_paths: Vec<PathBuf>,
+}
+
+impl CompileOptions {
+    fn flatten_or_default(options: Option<CompileOptions>) -> FlattenedOptions {
+        match options {
+            Some(opts) => FlattenedOptions {
+                body_only: opts.body_only.unwrap_or(false),
+                pretty: opts.pretty.unwrap_or(false),
+                no_metadata: opts.no_metadata.unwrap_or(false),
+                label_name: opts.metadata_label.unwrap_or_else(|| "meta".to_string()),
+                extra_font_paths: opts
+                    .font_paths
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect(),
+            },
+            None => FlattenedOptions {
+                body_only: false,
+                pretty: false,
+                no_metadata: false,
+                label_name: "meta".to_string(),
+                extra_font_paths: Vec::new(),
+            },
+        }
+    }
 }
 
 // ── File loader ────────────────────────────────────────────────────────
@@ -223,31 +273,27 @@ struct BridgeWorld {
 }
 
 impl BridgeWorld {
-    fn new(input_path: &Path, font_paths: &[PathBuf]) -> Result<Self> {
-        let abs = input_path
-            .canonicalize()
-            .context("Cannot resolve input file path")?;
-        let root = abs
+    /// Build a world around an already-canonicalized input path, a borrowed
+    /// library (from the process-wide cache), and an already-merged font
+    /// store. The callers in `TyHtml::compile` / `compileSync` own the
+    /// responsibility of building the `FontStore` from the instance's
+    /// `base_font_entries` plus any per-call font paths — see
+    /// `run_compile_with_world` for the full pipeline.
+    fn from_parts(
+        input_abs: PathBuf,
+        library: &'static LazyHash<Library>,
+        fonts: FontStore,
+    ) -> Result<Self> {
+        let root = input_abs
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        // Start from the cached system fonts and layer caller-supplied
-        // font directories on top. Per-call cost is `O(n_system_fonts)`
-        // Arc refcount bumps plus the `FontStore::extend` book rebuild,
-        // which is microseconds — much cheaper than re-scanning the
-        // system font directories (200–500 ms on macOS).
-        let mut fonts = FontStore::new();
-        fonts.extend(system_font_entries().iter().cloned());
-        for path in font_paths {
-            fonts.extend(typst_kit::fonts::scan(path));
-        }
-
-        let files = BridgeFiles::new(root, abs)?;
+        let files = BridgeFiles::new(root, input_abs)?;
         let now = Time::system();
 
         Ok(Self {
-            library: library(),
+            library,
             fonts,
             files: FileStore::new(files),
             now,
@@ -331,110 +377,135 @@ fn extract_body(html: &str) -> &str {
     }
 }
 
-// ── JS entry point ─────────────────────────────────────────────────────
+// ── TyHtml class ───────────────────────────────────────────────────────
 
-/// Compile a Typst source file to HTML and extract metadata.
+/// Long-lived Typst compilation engine.
 ///
-/// The compilation runs on a worker thread; this function returns a Promise
-/// so the Node.js event loop is never blocked. `input` is the path to a
-/// `.typ` file on disk; the file's parent directory becomes the project
-/// root for `#import` resolution.
+/// `TyHtml` owns the expensive-to-build state (the Typst `Library` and the
+/// merged font entry set built from system fonts plus any
+/// [`TyHtmlOptions::font_paths`] registered at construction time). Per-call
+/// work is reduced to: clone the cached font entries (`Arc` refcount
+/// bumps), extend with any per-call [`CompileOptions::font_paths`], build a
+/// `BridgeWorld`, and run `typst::compile`.
+///
+/// Construct once and reuse; the constructor is the explicit cold start.
+/// The async [`TyHtml::compile`] moves the blocking work onto a worker
+/// thread; [`TyHtml::compileSync`] runs it inline (use only when the
+/// caller is itself a sync consumer, e.g. a Vite plugin watch handler).
 #[napi]
-pub async fn compile_typst(
-    input: String,
-    options: Option<CompileOptions>,
-) -> napi::Result<CompileResult> {
-    compile_typst_impl(input, options).await
+pub struct TyHtml {
+    /// Borrowed from the process-wide `LIBRARY` cache — see module-level docs.
+    library: &'static LazyHash<Library>,
+    /// System fonts plus any constructor-supplied `font_paths`, materialised
+    /// once at construction time. Held behind `Arc` so the async compile
+    /// path can move a cheap clone into `spawn_blocking`.
+    base_font_entries: Arc<Vec<(CachedFontPath, FontInfo)>>,
 }
 
-/// Same as [`compile_typst`] but synchronous — runs on the calling thread
-/// and blocks until done. Use this when the caller is itself in a context
-/// where async would race with another sync consumer (e.g. a Vite plugin
-/// watch handler that needs to write its result before the framework
-/// re-evaluates dependent modules).
-///
-/// **Warning:** this blocks the Node.js event loop for the duration of
-/// the compile (~hundreds of ms). Only call from contexts where that is
-/// acceptable.
 #[napi]
-pub fn compile_typst_sync(
-    input: String,
-    options: Option<CompileOptions>,
-) -> napi::Result<CompileResult> {
-    let opts = options.unwrap_or(CompileOptions {
-        body_only: None,
-        pretty: None,
-        no_metadata: None,
-        metadata_label: None,
-        font_paths: None,
-    });
+impl TyHtml {
+    /// Build the engine. Cold-start cost: one-shot system-font discovery
+    /// (cached for the process) plus a synchronous scan of every
+    /// `fontPaths` entry passed here.
+    #[napi(constructor)]
+    pub fn new(options: Option<TyHtmlOptions>) -> napi::Result<Self> {
+        let opts = options.unwrap_or(TyHtmlOptions { font_paths: None });
 
-    let body_only = opts.body_only.unwrap_or(false);
-    let pretty = opts.pretty.unwrap_or(false);
-    let no_metadata = opts.no_metadata.unwrap_or(false);
-    let label_name = opts
-        .metadata_label
-        .unwrap_or_else(|| "meta".to_string());
-    let font_paths: Vec<PathBuf> = opts
-        .font_paths
-        .unwrap_or_default()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
+        // Start from the cached system entries (cheap Arc-bump clone of the
+        // slice) and append any constructor-supplied font directories.
+        // Each extra directory is scanned exactly once, here, and the
+        // results are folded into the instance's base set.
+        let mut entries: Vec<(CachedFontPath, FontInfo)> =
+            system_font_entries().to_vec();
+        for path in opts.font_paths.unwrap_or_default() {
+            let p = PathBuf::from(path);
+            for (font_path, info) in typst_kit::fonts::scan(&p) {
+                entries.push((CachedFontPath(Arc::new(font_path)), info));
+            }
+        }
 
-    let input_path = PathBuf::from(&input);
+        Ok(Self {
+            library: library(),
+            base_font_entries: Arc::new(entries),
+        })
+    }
 
-    run_compile(input_path, font_paths, body_only, pretty, no_metadata, label_name)
+    /// Compile a Typst source file to HTML and extract metadata.
+    ///
+    /// Runs on a worker thread so the Node.js event loop is never blocked.
+    /// `input` is the path to a `.typ` file on disk; the file's parent
+    /// directory becomes the project root for `#import` resolution.
+    #[napi]
+    pub async fn compile(
+        &self,
+        input: String,
+        options: Option<CompileOptions>,
+    ) -> napi::Result<CompileResult> {
+        let flat = CompileOptions::flatten_or_default(options);
+
+        let library = self.library;
+        let base_entries = Arc::clone(&self.base_font_entries);
+        let input_path = PathBuf::from(input);
+
+        napi::tokio::task::spawn_blocking(move || -> Result<CompileResult> {
+            let mut fonts = FontStore::new();
+            fonts.extend(base_entries.iter().cloned());
+            for path in &flat.extra_font_paths {
+                fonts.extend(typst_kit::fonts::scan(path));
+            }
+
+            let abs = input_path
+                .canonicalize()
+                .context("Cannot resolve input file path")?;
+            let world = BridgeWorld::from_parts(abs, library, fonts)?;
+            run_compile_with_world(world, &flat)
+        })
+        .await
+        .map_err(|e| Error::from_reason(format!("worker thread join error: {e}")))?
         .map_err(|e| Error::from_reason(format!("{e:#}")))
+    }
+
+    /// Same as [`TyHtml::compile`] but synchronous — runs on the calling
+    /// thread and blocks until done. Use this when the caller is itself in
+    /// a context where async would race with another sync consumer (e.g.
+    /// a Vite plugin watch handler that needs to write its result before
+    /// the framework re-evaluates dependent modules).
+    ///
+    /// **Warning:** this blocks the Node.js event loop for the duration of
+    /// the compile (~hundreds of ms). Only call from contexts where that
+    /// is acceptable.
+    #[napi]
+    pub fn compile_sync(
+        &self,
+        input: String,
+        options: Option<CompileOptions>,
+    ) -> napi::Result<CompileResult> {
+        let flat = CompileOptions::flatten_or_default(options);
+
+        let mut fonts = FontStore::new();
+        fonts.extend(self.base_font_entries.iter().cloned());
+        for path in &flat.extra_font_paths {
+            fonts.extend(typst_kit::fonts::scan(path));
+        }
+
+        let input_path = PathBuf::from(input);
+        let abs = input_path
+            .canonicalize()
+            .context("Cannot resolve input file path")
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        let world = BridgeWorld::from_parts(abs, self.library, fonts)
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        run_compile_with_world(world, &flat)
+            .map_err(|e| Error::from_reason(format!("{e:#}")))
+    }
 }
 
-async fn compile_typst_impl(
-    input: String,
-    options: Option<CompileOptions>,
-) -> napi::Result<CompileResult> {
-    let opts = options.unwrap_or(CompileOptions {
-        body_only: None,
-        pretty: None,
-        no_metadata: None,
-        metadata_label: None,
-        font_paths: None,
-    });
+// ── Compile pipeline ───────────────────────────────────────────────────
 
-    let body_only = opts.body_only.unwrap_or(false);
-    let pretty = opts.pretty.unwrap_or(false);
-    let no_metadata = opts.no_metadata.unwrap_or(false);
-    let label_name = opts
-        .metadata_label
-        .unwrap_or_else(|| "meta".to_string());
-    let font_paths: Vec<PathBuf> = opts
-        .font_paths
-        .unwrap_or_default()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-
-    let input_path = PathBuf::from(&input);
-
-    // Move blocking work onto a worker thread so the event loop stays free.
-    let join_result = napi::tokio::task::spawn_blocking(move || {
-        run_compile(input_path, font_paths, body_only, pretty, no_metadata, label_name)
-    })
-    .await
-    .map_err(|e| Error::from_reason(format!("worker thread join error: {e}")))?;
-
-    join_result.map_err(|e| Error::from_reason(format!("{e:#}")))
-}
-
-fn run_compile(
-    input_path: PathBuf,
-    font_paths: Vec<PathBuf>,
-    body_only: bool,
-    pretty: bool,
-    no_metadata: bool,
-    label_name: String,
-) -> Result<CompileResult> {
-    let world = BridgeWorld::new(&input_path, &font_paths)?;
-
+/// Run the full compile pipeline against an already-built `BridgeWorld`.
+/// Pulled out of the JS entry points so the async / sync methods share
+/// the same Typst invocation.
+fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result<CompileResult> {
     let Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
 
     let warnings: Vec<CompileWarning> = warnings
@@ -449,20 +520,20 @@ fn run_compile(
         anyhow::anyhow!("Compilation failed:\n{}", msgs.join("\n"))
     })?;
 
-    let html_options = HtmlOptions { pretty };
+    let html_options = HtmlOptions { pretty: opts.pretty };
     let html_output = typst_html::html(&document, &html_options)
         .map_err(|e| anyhow::anyhow!("HTML export failed: {:?}", e))?;
 
-    let html_final = if body_only {
+    let html_final = if opts.body_only {
         extract_body(&html_output).to_string()
     } else {
         html_output
     };
 
-    let metadata = if no_metadata {
+    let metadata = if opts.no_metadata {
         None
     } else {
-        extract_metadata(&document, &label_name)
+        extract_metadata(&document, &opts.label_name)
     };
 
     Ok(CompileResult {

@@ -33,16 +33,23 @@ The macOS binaries are **universal in the sense of API**, but each architecture 
 
 ## Usage
 
+The native addon exports a single class, `TyHtml`. Construct once (this is the explicit cold start — system-font discovery plus any constructor `fontPaths` scan happen here), then call `compile` / `compileSync` as many times as you like.
+
 ```ts
-import { compileTypst, compileTypstSync } from '@isomtop/tyhtml'
+import { TyHtml } from '@isomtop/tyhtml'
+
+// Constructor = cold start. Pass base fontPaths here if you need them.
+const engine = new TyHtml({
+  fontPaths: ['C:/extra/fonts'],  // scanned once at construction
+})
 
 // Async — runs on a worker thread, never blocks the event loop.
-const result = await compileTypst('path/to/file.typ', {
+const result = await engine.compile('path/to/file.typ', {
   pretty: true,                  // pretty-print the HTML output
   bodyOnly: false,               // false = full <!DOCTYPE>...<body>; true = strip wrapper
   noMetadata: false,             // set true to skip the <meta> label query (faster)
   metadataLabel: 'meta',         // override the default label queried for metadata
-  fontPaths: ['C:/extra/fonts'], // additional font directories
+  fontPaths: ['/tmp/extra'],     // per-call extras, layered on top of constructor set
 })
 
 console.log(result.html)
@@ -52,10 +59,10 @@ const meta = result.metadata ? JSON.parse(result.metadata) : null
 console.log(meta)
 // → { title: 'Hello', tags: ['a', 'b'], ... }
 
-// Sync variant — same options, blocks the event loop until done.
+// Sync variant — same instance, same caches, runs inline on the caller.
 // Use in contexts where async would race with another sync consumer
 // (e.g. a Vite plugin watch handler).
-const syncResult = compileTypstSync('path/to/file.typ', { pretty: true })
+const syncResult = engine.compileSync('path/to/file.typ', { pretty: true })
 ```
 
 The full API surface is in [`index.d.ts`](./index.d.ts) (auto-generated from `src/lib.rs`).
