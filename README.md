@@ -12,16 +12,19 @@ The package ships with prebuilt binaries for the following platforms via npm `op
 
 | Platform | Package |
 |---|---|
-| Windows x64 | `@isomtop/tyhtml-win32-x64-msvc` |
+| Windows x64 (MSVC) | `@isomtop/tyhtml-win32-x64-msvc` |
 | Linux x64 (glibc) | `@isomtop/tyhtml-linux-x64-gnu` |
+| macOS Apple Silicon (arm64) | `@isomtop/tyhtml-darwin-arm64` |
+| macOS Intel (x64) | `@isomtop/tyhtml-darwin-x64` |
 
-If your platform is not in this list, `npm install` will succeed (the binaries are `optionalDependencies`) but importing the module will fail at runtime — you'll need to build from source.
+The macOS binaries are **universal in the sense of API**, but each architecture ships as its own npm package — `npm install` will pick the right one for the host automatically. If your platform is not in this list, `npm install` will succeed (the binaries are `optionalDependencies`) but importing the module will fail at runtime — you'll need to build from source.
 
 ## Usage
 
 ```ts
-import { compileTypst } from '@isomtop/tyhtml'
+import { compileTypst, compileTypstSync } from '@isomtop/tyhtml'
 
+// Async — runs on a worker thread, never blocks the event loop.
 const result = await compileTypst('path/to/file.typ', {
   pretty: true,                  // pretty-print the HTML output
   bodyOnly: false,               // false = full <!DOCTYPE>...<body>; true = strip wrapper
@@ -36,6 +39,11 @@ console.log(result.html)
 const meta = result.metadata ? JSON.parse(result.metadata) : null
 console.log(meta)
 // → { title: 'Hello', tags: ['a', 'b'], ... }
+
+// Sync variant — same options, blocks the event loop until done.
+// Use in contexts where async would race with another sync consumer
+// (e.g. a Vite plugin watch handler).
+const syncResult = compileTypstSync('path/to/file.typ', { pretty: true })
 ```
 
 The full API surface is in [`index.d.ts`](./index.d.ts) (auto-generated from `src/lib.rs`).
@@ -47,6 +55,7 @@ Requires:
 - Rust toolchain (edition 2024)
 - Node.js ≥ 14
 - For the Linux x64 cross-build: [zig](https://ziglang.org/) ≥ 0.13 and `@napi-rs/cross-toolchain` (`npm i -D @napi-rs/cross-toolchain`)
+- For the macOS (Darwin) cross-builds: an Apple SDK — easiest path is to run the host build on macOS (`npm run build` produces a darwin binary for the current arch), or set up the `osxcross` toolchain referenced by `@napi-rs/cross-toolchain`
 
 ```bash
 # Install JS deps
@@ -55,9 +64,14 @@ npm install
 # Build for the current host platform
 npm run build
 
-# Build for both supported target platforms
-# (host + Linux x64 via cargo-zigbuild)
+# Build for every supported target (host + Linux x64 + Darwin arm64 + Darwin x64)
 npm run build:all
+
+# Or build a single target explicitly:
+npm run build:win32-x64-msvc
+npm run build:linux-x64-gnu
+npm run build:darwin-arm64
+npm run build:darwin-x64
 ```
 
 ## Tests
@@ -70,7 +84,7 @@ bun tests/test.ts
 ## Publishing
 
 ```bash
-# 1. Build for both platforms and scaffold the npm/ scoped sub-packages
+# 1. Build for every supported target and scaffold the npm/ scoped sub-packages
 npm run prepublishOnly
 
 # 2. Login (one-time)
@@ -80,7 +94,7 @@ npm login
 npx napi pre-publish
 ```
 
-`napi pre-publish` iterates over every target in `napi.targets`, publishes the corresponding `@isomtop/tyhtml-{triple}` package, then publishes the root package which lists them all under `optionalDependencies`. Consumers get the right binary for their platform automatically.
+`napi pre-publish` iterates over every target in `napi.targets` (Windows x64, Linux x64, Darwin arm64, Darwin x64), publishes the corresponding `@isomtop/tyhtml-{triple}` package, then publishes the root package which lists them all under `optionalDependencies`. Consumers get the right binary for their platform automatically.
 
 ## License
 
