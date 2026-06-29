@@ -4,8 +4,20 @@ Native Node.js addon (Rust + [napi-rs](https://napi.rs)) that compiles [Typst](h
 
 ## Installation
 
+[Bun](https://bun.sh) is the preferred package manager for this project (the repo ships a `bun.lock` and the test suite runs on Bun):
+
+```bash
+bun add @isomtop/tyhtml
+```
+
+Other package managers work too — Bun just resolves the platform-specific `optionalDependencies` faster and the native binary loads via Bun's N-API shim out of the box:
+
 ```bash
 npm install @isomtop/tyhtml
+# or
+pnpm add @isomtop/tyhtml
+# or
+yarn add @isomtop/tyhtml
 ```
 
 The package ships with prebuilt binaries for the following platforms via npm `optionalDependencies`:
