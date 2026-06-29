@@ -2,6 +2,8 @@
 
 Native Node.js addon (Rust + [napi-rs](https://napi.rs)) that compiles [Typst](https://typst.app) `.typ` files to HTML and extracts metadata.
 
+[English](./README.md) | [简体中文](./README.zh.md)
+
 ## Installation
 
 [Bun](https://bun.sh) is the preferred package manager for this project (the repo ships a `bun.lock` and the test suite runs on Bun):
