@@ -1,7 +1,7 @@
 {
     "name": "tyhtml",
     "version": "0.1.0",
-    "description": "TODO: replace with a one-line description of tyhtml",
+    "description": "Native Node.js addon (Rust + napi-rs) that compiles Typst .typ files to HTML and extracts metadata via the <meta> label. Includes prebuilt binaries for Windows x64 and Linux x64 glibc.",
     "license": "MIT",
     "author": "Ling Yu <yulingsc@outlook.com>",
     "repository": {
@@ -11,7 +11,10 @@
     "keywords": [
         "napi-rs",
         "native",
-        "node-addon"
+        "node-addon",
+        "typst",
+        "typst-html",
+        "html"
     ],
     "main": "index.js",
     "module": "index.js",
