@@ -21,7 +21,7 @@ typst-utils = "0.15.0"
 napi-build = "2.3.2"
 
 [profile.release]
-opt-level = "z"      # optimize for size over speed
+opt-level = 3        # optimize for speed (was "z" — size); see bench/run.ts
 lto = "fat"          # full link-time optimization across crates
 codegen-units = 1    # single codegen unit → better optimization
 panic = "abort"      # drop unwinding tables
