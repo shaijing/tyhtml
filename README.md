@@ -5,22 +5,22 @@ Native Node.js addon (Rust + [napi-rs](https://napi.rs)) that compiles [Typst](h
 ## Installation
 
 ```bash
-npm install @shaijing/tyhtml
+npm install @isomtop/tyhtml
 ```
 
 The package ships with prebuilt binaries for the following platforms via npm `optionalDependencies`:
 
 | Platform | Package |
 |---|---|
-| Windows x64 | `@shaijing/tyhtml-win32-x64-msvc` |
-| Linux x64 (glibc) | `@shaijing/tyhtml-linux-x64-gnu` |
+| Windows x64 | `@isomtop/tyhtml-win32-x64-msvc` |
+| Linux x64 (glibc) | `@isomtop/tyhtml-linux-x64-gnu` |
 
 If your platform is not in this list, `npm install` will succeed (the binaries are `optionalDependencies`) but importing the module will fail at runtime — you'll need to build from source.
 
 ## Usage
 
 ```ts
-import { compileTypst } from '@shaijing/tyhtml'
+import { compileTypst } from '@isomtop/tyhtml'
 
 const result = await compileTypst('path/to/file.typ', {
   pretty: true,                  // pretty-print the HTML output
@@ -80,7 +80,7 @@ npm login
 npx napi pre-publish
 ```
 
-`napi pre-publish` iterates over every target in `napi.targets`, publishes the corresponding `@shaijing/tyhtml-{triple}` package, then publishes the root package which lists them all under `optionalDependencies`. Consumers get the right binary for their platform automatically.
+`napi pre-publish` iterates over every target in `napi.targets`, publishes the corresponding `@isomtop/tyhtml-{triple}` package, then publishes the root package which lists them all under `optionalDependencies`. Consumers get the right binary for their platform automatically.
 
 ## License
 
