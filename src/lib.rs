@@ -230,7 +230,10 @@ fn typst_data_dir() -> PathBuf {
             PathBuf::from(dir).join("typst")
         } else {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".local").join("share").join("typst")
+            PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("typst")
         }
     }
 }
@@ -246,7 +249,10 @@ fn typst_cache_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join("Library").join("Caches").join("typst")
+        PathBuf::from(home)
+            .join("Library")
+            .join("Caches")
+            .join("typst")
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -264,9 +270,9 @@ fn typst_cache_dir() -> PathBuf {
 struct BridgeWorld {
     /// Borrowed from the process-wide `LIBRARY` cache — see module-level docs.
     library: &'static LazyHash<Library>,
-    /// Owned per call: cloned from the cached system store (cheap, Arc bumps
-    /// + a small `Vec<FontInfo>`) and then extended with any caller-supplied
-    /// `fontPaths`.
+    /// Owned per call: cloned from the cached system store (cheap — Arc
+    /// refcount bumps plus a small `Vec<FontInfo>`) and then extended with
+    /// any caller-supplied `fontPaths`.
     fonts: FontStore,
     files: FileStore<BridgeFiles>,
     now: Time,
@@ -303,7 +309,7 @@ impl BridgeWorld {
 
 impl World for BridgeWorld {
     fn library(&self) -> &LazyHash<Library> {
-        &self.library
+        self.library
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
@@ -415,8 +421,7 @@ impl TyHtml {
         // slice) and append any constructor-supplied font directories.
         // Each extra directory is scanned exactly once, here, and the
         // results are folded into the instance's base set.
-        let mut entries: Vec<(CachedFontPath, FontInfo)> =
-            system_font_entries().to_vec();
+        let mut entries: Vec<(CachedFontPath, FontInfo)> = system_font_entries().to_vec();
         for path in opts.font_paths.unwrap_or_default() {
             let p = PathBuf::from(path);
             for (font_path, info) in typst_kit::fonts::scan(&p) {
@@ -495,8 +500,7 @@ impl TyHtml {
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
         let world = BridgeWorld::from_parts(abs, self.library, fonts)
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-        run_compile_with_world(world, &flat)
-            .map_err(|e| Error::from_reason(format!("{e:#}")))
+        run_compile_with_world(world, &flat).map_err(|e| Error::from_reason(format!("{e:#}")))
     }
 }
 
@@ -520,7 +524,9 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
         anyhow::anyhow!("Compilation failed:\n{}", msgs.join("\n"))
     })?;
 
-    let html_options = HtmlOptions { pretty: opts.pretty };
+    let html_options = HtmlOptions {
+        pretty: opts.pretty,
+    };
     let html_output = typst_html::html(&document, &html_options)
         .map_err(|e| anyhow::anyhow!("HTML export failed: {:?}", e))?;
 

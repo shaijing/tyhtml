@@ -93,3 +93,107 @@ Notes:
 - `cargo test` passed but reported `0 tests`.
 - `bun tests/test.ts` is currently a smoke test and successfully compiled `tests/fixtures/hello.typ`.
 - The smoke test produced one Typst warning: `html export is under active development and incomplete`.
+
+---
+
+Date: 2026-06-29
+
+This review covered the current main branch after the TyHtml class API refactor and the release profile / benchmark commit. The working tree was clean at review time.
+
+## Findings
+
+### 1. Rust formatting check fails
+
+Severity: Medium
+
+Locations:
+
+- build.rs:5
+- src/lib.rs:230
+- src/lib.rs:246
+- src/lib.rs:415
+- src/lib.rs:495
+- src/lib.rs:520
+
+Issue:
+
+cargo fmt --check reports formatting diffs. This is not a runtime bug, but it will fail any CI or release gate that enforces rustfmt. The reported diff includes indentation in build.rs and several line-wrapping changes in src/lib.rs.
+
+Suggested fix:
+
+Run cargo fmt and commit the formatting-only changes.
+
+### 2. Clippy warnings remain after the refactor
+
+Severity: Low
+
+Locations:
+
+- src/lib.rs:269
+- src/lib.rs:306
+
+Issue:
+
+cargo clippy --all-targets --all-features completes, but emits two warnings:
+
+- clippy::doc_lazy_continuation on the fontPaths doc comment.
+- clippy::needless_borrow in World::library, where &self.library is immediately dereferenced by the compiler.
+
+Suggested fix:
+
+Indent the continuation doc line, and return self.library directly from World::library.
+
+### 3. Agent guidance still describes the old release profile
+
+Severity: Low
+
+Locations:
+
+- Cargo.toml:24
+- AGENTS.md:44
+
+Issue:
+
+Cargo.toml now uses opt-level = 3, but AGENTS.md still describes the release profile as size-optimized with opt-level set to z. This can mislead future maintainers or coding agents about the intended binary-size/performance trade-off.
+
+Suggested fix:
+
+Update AGENTS.md to describe the current speed-optimized release profile, including the known binary-size trade-off if that context should remain visible.
+
+### 4. Fixture text still mentions the removed top-level API
+
+Severity: Nit
+
+Location:
+
+- tests/fixtures/hello.typ:3
+
+Issue:
+
+The fixture body says it is for compileTypst, but the public JS API is now the TyHtml class. This does not affect test execution, but the smoke test prints generated HTML from this fixture, so old API terminology can still appear in review output.
+
+Suggested fix:
+
+Change the fixture sentence to reference TyHtml or the smoke test generically.
+
+## Verification Run
+
+The following commands completed successfully during review:
+
+    cargo test
+    bunx tsc --noEmit
+    bun tests/test.ts
+    bun bench/run.ts 2
+
+The following commands did not pass cleanly:
+
+    cargo fmt --check
+    cargo clippy --all-targets --all-features
+
+Notes:
+
+- cargo test passed but reported 0 tests.
+- bun tests/test.ts successfully exercised both engine.compile and engine.compileSync.
+- bun bench/run.ts 2 completed and reported timing stats.
+- cargo fmt --check failed due to rustfmt diffs.
+- cargo clippy --all-targets --all-features compiled successfully but emitted two warnings.

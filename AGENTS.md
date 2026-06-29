@@ -41,7 +41,7 @@ tyhtml/
 │   ├── darwin-arm64/
 │   └── darwin-x64/
 ├── docs/review-findings.md # Historical review notes (do not edit)
-├── Cargo.toml              # Cargo deps + release profile (size-optimized: `opt-level="z"`, LTO, strip)
+├── Cargo.toml              # Cargo deps + release profile (speed-optimized: `opt-level=3`, LTO, strip; see §8)
 ├── package.json            # napi.targets, scripts, optionalDependencies
 ├── tsconfig.json           # Bun-typed TS config (noEmit; types=["bun"])
 ├── README.md               # User-facing docs

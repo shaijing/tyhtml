@@ -1,6 +1,6 @@
 = Hello from typst
 
-This is a *minimal* fixture for `compileTypst`.
+This is a *minimal* fixture for the `TyHtml` engine.
 
 #let post_info = (
   title: "Hello from typst",
