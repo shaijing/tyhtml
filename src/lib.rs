@@ -287,6 +287,54 @@ pub async fn compile_typst(
     input: String,
     options: Option<CompileOptions>,
 ) -> napi::Result<CompileResult> {
+    compile_typst_impl(input, options).await
+}
+
+/// Same as [`compile_typst`] but synchronous — runs on the calling thread
+/// and blocks until done. Use this when the caller is itself in a context
+/// where async would race with another sync consumer (e.g. a Vite plugin
+/// watch handler that needs to write its result before the framework
+/// re-evaluates dependent modules).
+///
+/// **Warning:** this blocks the Node.js event loop for the duration of
+/// the compile (~hundreds of ms). Only call from contexts where that is
+/// acceptable.
+#[napi]
+pub fn compile_typst_sync(
+    input: String,
+    options: Option<CompileOptions>,
+) -> napi::Result<CompileResult> {
+    let opts = options.unwrap_or(CompileOptions {
+        body_only: None,
+        pretty: None,
+        no_metadata: None,
+        metadata_label: None,
+        font_paths: None,
+    });
+
+    let body_only = opts.body_only.unwrap_or(false);
+    let pretty = opts.pretty.unwrap_or(false);
+    let no_metadata = opts.no_metadata.unwrap_or(false);
+    let label_name = opts
+        .metadata_label
+        .unwrap_or_else(|| "meta".to_string());
+    let font_paths: Vec<PathBuf> = opts
+        .font_paths
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+
+    let input_path = PathBuf::from(&input);
+
+    run_compile(input_path, font_paths, body_only, pretty, no_metadata, label_name)
+        .map_err(|e| Error::from_reason(format!("{e:#}")))
+}
+
+async fn compile_typst_impl(
+    input: String,
+    options: Option<CompileOptions>,
+) -> napi::Result<CompileResult> {
     let opts = options.unwrap_or(CompileOptions {
         body_only: None,
         pretty: None,
