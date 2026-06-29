@@ -1,4 +1,4 @@
-# tyhtml
+# TyHtml
 
 Native Node.js addon (Rust + [napi-rs](https://napi.rs)) that compiles [Typst](https://typst.app) `.typ` files to HTML and extracts metadata.
 
