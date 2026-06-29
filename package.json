@@ -1,6 +1,6 @@
 {
     "name": "@isomtop/tyhtml",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Native Node.js addon (Rust + napi-rs) that compiles Typst .typ files to HTML and extracts metadata via the <meta> label. Includes prebuilt binaries for Windows x64, Linux x64 (glibc), and macOS (Apple Silicon + Intel).",
     "license": "MIT",
     "author": "Ling Yu <yulingsc@outlook.com>",
@@ -32,10 +32,10 @@
         "index.d.ts"
     ],
     "optionalDependencies": {
-        "@isomtop/tyhtml-win32-x64-msvc": "0.1.0",
-        "@isomtop/tyhtml-linux-x64-gnu": "0.1.0",
-        "@isomtop/tyhtml-darwin-arm64": "0.1.0",
-        "@isomtop/tyhtml-darwin-x64": "0.1.0"
+        "@isomtop/tyhtml-win32-x64-msvc": "0.1.1",
+        "@isomtop/tyhtml-linux-x64-gnu": "0.1.1",
+        "@isomtop/tyhtml-darwin-arm64": "0.1.1",
+        "@isomtop/tyhtml-darwin-x64": "0.1.1"
     },
     "napi": {
         "binaryName": "tyhtml",
