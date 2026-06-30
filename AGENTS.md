@@ -223,7 +223,7 @@ Anything that changes the JS surface lives in `src/lib.rs`. After editing:
 - **Worker thread blocking** — `TyHtml::compile` already moves work off the JS thread via `spawn_blocking`. Do not add a sync path that bypasses this without an explicit reason; `compileSync` is the only sanctioned blocking variant.
 - **Per-call `fontPaths` is a fresh scan** — anything passed via `CompileOptions.fontPaths` is `typst_kit::fonts::scan`'d on every call (per-call directories are not cached on the instance). Move directories that don't change at runtime into the `TyHtmlOptions.fontPaths` constructor arg instead, where they're scanned exactly once.
 - **Optional dependencies** — adding a new platform target means publishing a new npm sub-package first, otherwise `bun install` on that platform silently skips the binary and the import throws at runtime.
-- **`packageManager` field** — keep it pinned (`bun@1.4.0` today). Corepack and other tooling will refuse to install if the lockfile was produced by a different version.
+- **`packageManager` field** — do not pin to a Bun version here. Stable Bun releases are frequent and pinning to a specific version (especially a canary) breaks Corepack and the `oven-sh/setup-bun` GitHub Action. The `bun.lock` alone is enough for reproducibility — `bun install` on any recent stable Bun will reconcile.
 
 ---
 
