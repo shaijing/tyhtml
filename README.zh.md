@@ -85,10 +85,7 @@ npm install
 # 为当前主机平台构建
 npm run build
 
-# 构建所有支持的目标(宿主 + Linux x64 + Darwin arm64 + Darwin x64)
-npm run build:all
-
-# 也可以显式构建单个目标:
+# 也可以显式构建单个目标(主机上需要对应的交叉工具链):
 npm run build:win32-x64-msvc
 npm run build:linux-x64-gnu
 npm run build:darwin-arm64

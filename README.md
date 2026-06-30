@@ -85,10 +85,7 @@ npm install
 # Build for the current host platform
 npm run build
 
-# Build for every supported target (host + Linux x64 + Darwin arm64 + Darwin x64)
-npm run build:all
-
-# Or build a single target explicitly:
+# Or build a single target explicitly (requires the matching cross-toolchain on the host):
 npm run build:win32-x64-msvc
 npm run build:linux-x64-gnu
 npm run build:darwin-arm64
