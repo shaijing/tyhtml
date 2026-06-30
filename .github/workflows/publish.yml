@@ -92,6 +92,18 @@ jobs:
             - name: Install dependencies
               run: bun install
 
+            - name: Set up zig (cross only)
+              # `@napi-rs/cross-toolchain` bundles a zig binary per host
+              # platform via its optionalDependencies, but pinning the
+              # version explicitly here makes the cross-build step
+              # deterministic across runs and decouples it from any
+              # future upstream version bumps. Only the one cross
+              # matrix entry (`darwin-x64` on macos-arm64) needs zig.
+              if: "!matrix.host"
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.13.0
+
             - name: Add Rust target (cross only)
               # Cross-compiling via `--cross-compile` needs the target's
               # std library installed; rustup only ships the host target
