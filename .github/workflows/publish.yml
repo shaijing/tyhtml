@@ -205,7 +205,9 @@ jobs:
               # download-artifact with merge-multiple: true extracts
               # all artifact files flat under `artifacts/` (no
               # per-artifact subdirectory), so the source path is just
-              # `artifacts/tyhtml.<triple>.node`.
+              # `artifacts/tyhtml.<triple>.node`. Missing any of the
+              # four aborts the publish — better to fail loudly than
+              # ship an empty sub-package.
               shell: bash
               run: |
                   set -euo pipefail
@@ -217,19 +219,19 @@ jobs:
                           cp "$src" "$dst"
                           echo "staged $dst ($(wc -c < "$dst") bytes)"
                       else
-                          echo "::warning::${src} not found — ${triple} sub-package will publish without a binary"
+                          echo "::error::${src} not found"
+                          exit 1
                       fi
                   done
 
             - name: Publish sub-packages + root
-              # `bun run release` invokes `napi pre-publish`, which
-              # iterates `napi.targets`, runs `npm publish --provenance`
-              # in each npm/<triple>/, then publishes the root.
-              # `--provenance` attaches npm provenance attestation to
-              # each version (requires the Trusted Publisher link
-              # configured in the npm UI). `--no-gh-release` skips
-              # `napi-rs`'s optional GitHub Release draft — we publish
-              # from the tag directly.
-              run: bun run release
-              env:
-                  NODE_AUTH_TOKEN: '' # force Trusted Publisher path; don't fall back to any stray NPM_TOKEN
+              # Publishes each per-platform sub-package first (the
+              # npm/<triple>/ dirs that the stage step populated),
+              # then publishes the root. Auth is OIDC via
+              # `id-token: write` + `registry-url` on setup-node —
+              # no NPM_TOKEN secret.
+              run: |
+                  for triple in linux-x64-gnu win32-x64-msvc darwin-arm64 darwin-x64; do
+                      (cd "npm/${triple}" && npm publish)
+                  done
+                  npm publish
