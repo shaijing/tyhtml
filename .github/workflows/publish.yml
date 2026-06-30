@@ -9,8 +9,9 @@
 #   1. `build` matrix: each runner builds its native .node binary and
 #      uploads it as an artifact.
 #   2. `publish`: downloads all four artifacts, stages them into
-#      `npm/<triple>/`, then runs `npx napi pre-publish` to publish
-#      every sub-package followed by the root in lockstep.
+#      `npm/<triple>/`, then runs `bun run release` (which delegates
+#      to `napi pre-publish`) to publish every sub-package followed
+#      by the root in lockstep.
 #
 # Auth uses npm Trusted Publisher (OIDC). One-time setup in npmjs.com:
 #   - For each of the five packages (root + 4 sub-packages):
@@ -86,7 +87,7 @@ jobs:
               # `index.d.ts` (gitignored), and `tests/test.ts` imports
               # `'../index'` — typecheck needs the freshly-emitted
               # type declarations to resolve.
-              run: npx napi build --platform --esm --release --target ${{ matrix.target }}
+              run: bun run build:${{ matrix.triple }}
 
             - name: Typecheck
               run: bunx tsc --noEmit
@@ -109,8 +110,9 @@ jobs:
     #
     # Runs after every matrix build succeeds. Downloads the four .node
     # artifacts, drops them into `npm/<triple>/`, then defers to
-    # `npx napi pre-publish` which iterates `napi.targets`, publishes
-    # each sub-package (in dependency order), then publishes the root.
+    # `bun run release` (which delegates to `napi pre-publish`)
+    # iterates `napi.targets`, publishes each sub-package (in
+    # dependency order), then publishes the root.
     #
     # `id-token: write` + `registry-url` on setup-node gives npm Trusted
     # Publisher auth automatically — npm fetches a short-lived OIDC
@@ -172,13 +174,14 @@ jobs:
                   done
 
             - name: Publish sub-packages + root
-              # napi pre-publish iterates `napi.targets`, runs
-              # `npm publish --provenance` in each npm/<triple>/, then
-              # publishes the root. `--provenance` attaches npm
-              # provenance attestation to each version (requires the
-              # Trusted Publisher link configured in the npm UI).
-              # `--no-gh-release` skips `napi-rs`'s optional GitHub
-              # Release draft — we publish from the tag directly.
-              run: npx napi pre-publish --provenance --no-gh-release
+              # `bun run release` invokes `napi pre-publish`, which
+              # iterates `napi.targets`, runs `npm publish --provenance`
+              # in each npm/<triple>/, then publishes the root.
+              # `--provenance` attaches npm provenance attestation to
+              # each version (requires the Trusted Publisher link
+              # configured in the npm UI). `--no-gh-release` skips
+              # `napi-rs`'s optional GitHub Release draft — we publish
+              # from the tag directly.
+              run: bun run release
               env:
                   NODE_AUTH_TOKEN: '' # force Trusted Publisher path; don't fall back to any stray NPM_TOKEN
