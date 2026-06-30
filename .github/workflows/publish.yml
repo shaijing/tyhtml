@@ -202,11 +202,15 @@ jobs:
                   merge-multiple: true
 
             - name: Stage binaries into npm/<triple>/
+              # download-artifact with merge-multiple: true extracts
+              # all artifact files flat under `artifacts/` (no
+              # per-artifact subdirectory), so the source path is just
+              # `artifacts/tyhtml.<triple>.node`.
               shell: bash
               run: |
                   set -euo pipefail
                   for triple in linux-x64-gnu win32-x64-msvc darwin-arm64 darwin-x64; do
-                      src="artifacts/tyhtml-${triple}/tyhtml.${triple}.node"
+                      src="artifacts/tyhtml.${triple}.node"
                       dst="npm/${triple}/tyhtml.${triple}.node"
                       if [ -f "$src" ]; then
                           mkdir -p "npm/${triple}"
