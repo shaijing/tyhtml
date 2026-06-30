@@ -1,0 +1,35 @@
+{
+  "name": "@isomtop/tyhtml-darwin-arm64",
+  "version": "0.1.2",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "tyhtml.darwin-arm64.node",
+  "files": [
+    "tyhtml.darwin-arm64.node"
+  ],
+  "description": "Native Node.js addon (Rust + napi-rs) that compiles Typst .typ files to HTML and extracts metadata via the <meta> label. Includes prebuilt binaries for Windows x64, Linux x64 (glibc), and macOS (Apple Silicon + Intel).",
+  "keywords": [
+    "napi-rs",
+    "native",
+    "node-addon",
+    "typst",
+    "typst-html",
+    "html"
+  ],
+  "author": "Ling Yu <yulingsc@outlook.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">= 14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaijing/tyhtml.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "darwin"
+  ]
+}
