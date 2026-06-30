@@ -56,7 +56,7 @@
         "build:all": "npm run build && npm run build:linux-x64-gnu && npm run build:darwin-arm64 && npm run build:darwin-x64",
         "create-npm-dirs": "napi create-npm-dirs",
         "artifacts": "napi artifacts --output-dir .",
-        "prepublishOnly": "npm run create-npm-dirs && npm run artifacts"
+        "prepublishOnly": "npm run artifacts"
     },
     "devDependencies": {
         "@napi-rs/cross-toolchain": "^1.0.0",
