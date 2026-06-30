@@ -1,0 +1,180 @@
+# Publishes @isomtop/tyhtml (root + four per-platform sub-packages) to
+# the npm registry when a `v*` tag is pushed.
+#
+# The single-runner pattern from a stock npm Trusted Publisher action
+# doesn't fit this repo — napi-rs native binaries need to be built on
+# each target's native host (Windows MSVC on `windows-latest`, Apple
+# toolchain on `macos-latest`, etc.). So this is a two-stage workflow:
+#
+#   1. `build` matrix: each runner builds its native .node binary and
+#      uploads it as an artifact.
+#   2. `publish`: downloads all four artifacts, stages them into
+#      `npm/<triple>/`, then runs `npx napi pre-publish` to publish
+#      every sub-package followed by the root in lockstep.
+#
+# Auth uses npm Trusted Publisher (OIDC). One-time setup in npmjs.com:
+#   - For each of the five packages (root + 4 sub-packages):
+#     Package settings → Trusted Publisher → Add → GitHub Actions
+#     → fill in: owner=shaijing, repo=tyhtml,
+#       workflow file=publish.yml, environment=(leave blank)
+#   - No NPM_TOKEN secret needed in the repo.
+#
+# Trigger: `git tag v0.1.3 && git push --tags` (or via GitHub UI).
+name: publish
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+# Cancel any in-flight publish for the same ref when a new tag is pushed
+# quickly. Doesn't affect the build matrix since each run is per-tag.
+concurrency:
+    group: publish-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    # ── Per-platform builds ────────────────────────────────────────────
+    #
+    # One runner per target triple. Each builds only the binary it's
+    # capable of producing, then uploads it as an artifact named after
+    # the triple so the publish job can collect them all.
+    build:
+        name: build (${{ matrix.triple }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                      triple: linux-x64-gnu
+                    - os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                      triple: win32-x64-msvc
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
+                      triple: darwin-arm64
+                    - os: macos-latest
+                      target: x86_64-apple-darwin
+                      triple: darwin-x64
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '24'
+
+            - uses: oven-sh/setup-bun@v2
+
+            - name: Cache cargo registry + target
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      target
+                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+                  restore-keys: |
+                      ${{ runner.os }}-cargo-
+
+            - name: Install dependencies
+              run: bun install --frozen-lockfile
+
+            - name: Typecheck
+              run: bunx tsc --noEmit
+
+            - name: Build (${{ matrix.triple }})
+              run: npx napi build --platform --esm --release --target ${{ matrix.target }}
+
+            - name: Smoke test (host)
+              # Compiles tests/fixtures/hello.typ with the freshly-built
+              # binary. Fails fast if the .node is corrupt or the Rust
+              # surface drifts from the TS surface.
+              run: bun tests/test.ts
+
+            - name: Upload .node binary
+              uses: actions/upload-artifact@v4
+              with:
+                  name: tyhtml-${{ matrix.triple }}
+                  path: tyhtml.${{ matrix.triple }}.node
+                  if-no-files-found: error
+                  retention-days: 7
+
+    # ── Aggregate + publish ────────────────────────────────────────────
+    #
+    # Runs after every matrix build succeeds. Downloads the four .node
+    # artifacts, drops them into `npm/<triple>/`, then defers to
+    # `npx napi pre-publish` which iterates `napi.targets`, publishes
+    # each sub-package (in dependency order), then publishes the root.
+    #
+    # `id-token: write` + `registry-url` on setup-node gives npm Trusted
+    # Publisher auth automatically — npm fetches a short-lived OIDC
+    # token from GitHub and exchanges it. No NPM_TOKEN secret.
+    publish:
+        name: publish to npm
+        needs: build
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '24'
+                  registry-url: 'https://registry.npmjs.org'
+
+            - uses: oven-sh/setup-bun@v2
+
+            - name: Install dependencies
+              run: bun install --frozen-lockfile
+
+            - name: Verify tag matches package.json version
+              # Belt-and-suspenders: refuse to publish if someone tagged
+              # `v0.1.3` without bumping package.json (or vice versa).
+              shell: bash
+              run: |
+                  tag="${GITHUB_REF_NAME#v}"
+                  pkg="$(node -p "require('./package.json').version")"
+                  if [ "$tag" != "$pkg" ]; then
+                      echo "::error::tag v${tag} does not match package.json version ${pkg}"
+                      exit 1
+                  fi
+                  echo "tag v${tag} matches package.json version ${pkg}"
+
+            - name: Download all .node artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: tyhtml-*
+                  path: artifacts
+                  merge-multiple: true
+
+            - name: Stage binaries into npm/<triple>/
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  for triple in linux-x64-gnu win32-x64-msvc darwin-arm64 darwin-x64; do
+                      src="artifacts/tyhtml-${triple}/tyhtml.${triple}.node"
+                      dst="npm/${triple}/tyhtml.${triple}.node"
+                      if [ -f "$src" ]; then
+                          mkdir -p "npm/${triple}"
+                          cp "$src" "$dst"
+                          echo "staged $dst ($(wc -c < "$dst") bytes)"
+                      else
+                          echo "::warning::${src} not found — ${triple} sub-package will publish without a binary"
+                      fi
+                  done
+
+            - name: Publish sub-packages + root
+              # napi pre-publish iterates `napi.targets`, runs
+              # `npm publish --provenance` in each npm/<triple>/, then
+              # publishes the root. `--provenance` attaches npm
+              # provenance attestation to each version (requires the
+              # Trusted Publisher link configured in the npm UI).
+              # `--no-gh-release` skips `napi-rs`'s optional GitHub
+              # Release draft — we publish from the tag directly.
+              run: npx napi pre-publish --provenance --no-gh-release
+              env:
+                  NODE_AUTH_TOKEN: '' # force Trusted Publisher path; don't fall back to any stray NPM_TOKEN
