@@ -132,6 +132,14 @@ jobs:
               # Compiles tests/fixtures/hello.typ with the freshly-built
               # binary. Fails fast if the .node is corrupt or the Rust
               # surface drifts from the TS surface.
+              #
+              # Host-only: the napi loader picks the binary by
+              # `process.platform`/`process.arch`. On the darwin-x64
+              # cross entry the runner is arm64 and the freshly-built
+              # `tyhtml.darwin-x64.node` is invisible to the loader —
+              # skipping the test avoids a false negative; the artifact
+              # upload still proceeds so the publish job gets the binary.
+              if: matrix.host
               run: bun tests/test.ts
 
             - name: Upload .node binary
