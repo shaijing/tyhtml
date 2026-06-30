@@ -53,15 +53,19 @@ jobs:
             matrix:
                 include:
                     - os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
                       triple: linux-x64-gnu
                       host: true
                     - os: windows-latest
+                      target: x86_64-pc-windows-msvc
                       triple: win32-x64-msvc
                       host: true
                     - os: macos-latest
+                      target: aarch64-apple-darwin
                       triple: darwin-arm64
                       host: true
                     - os: macos-latest
+                      target: x86_64-apple-darwin
                       triple: darwin-x64
                       host: false
         runs-on: ${{ matrix.os }}
@@ -87,6 +91,16 @@ jobs:
 
             - name: Install dependencies
               run: bun install
+
+            - name: Add Rust target (cross only)
+              # Cross-compiling via `--cross-compile` needs the target's
+              # std library installed; rustup only ships the host target
+              # by default. macos-latest is arm64 hardware — building
+              # `darwin-x64` there needs `x86_64-apple-darwin` added.
+              # Host entries skip this (their target is already the
+              # default).
+              if: "!matrix.host"
+              run: rustup target add ${{ matrix.target }}
 
             - name: Build (${{ matrix.triple }})
               # Must run before typecheck: `napi build` regenerates
