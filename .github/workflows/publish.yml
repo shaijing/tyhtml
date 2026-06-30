@@ -49,7 +49,7 @@ jobs:
     build:
         name: build (${{ matrix.triple }})
         strategy:
-            fail-fast: false
+            fail-fast: true
             matrix:
                 include:
                     - os: ubuntu-latest
