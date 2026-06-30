@@ -53,7 +53,6 @@
         "build:linux-x64-gnu": "napi build --platform --esm --release --target x86_64-unknown-linux-gnu --cross-compile",
         "build:darwin-arm64": "napi build --platform --esm --release --target aarch64-apple-darwin --cross-compile",
         "build:darwin-x64": "napi build --platform --esm --release --target x86_64-apple-darwin --cross-compile",
-        "build:all": "npm run build && npm run build:linux-x64-gnu && npm run build:darwin-arm64 && npm run build:darwin-x64",
         "create-npm-dirs": "napi create-npm-dirs",
         "artifacts": "napi artifacts --output-dir .",
         "prepublishOnly": "npm run artifacts"

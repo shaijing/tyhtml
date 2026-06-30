@@ -132,8 +132,16 @@ bun install
 # Build the host binary (index.js + index.d.ts + .node land at repo root)
 bun run build
 
-# Build every supported target (host + Linux x64 + Darwin arm64 + Darwin x64)
-bun run build:all
+# Build a single non-host target — only runs to completion on a host
+# with the right cross-toolchain set up:
+#   * Linux x64 → zig (driven by `@napi-rs/cross-toolchain`)
+#   * Darwin arm64 / x64 → osxcross (SDKROOT + OSXCROSS_ROOT)
+# The four `build:<triple-short>` scripts are provided as recipes;
+# pick the ones that match your toolchain.
+bun run build:win32-x64-msvc
+bun run build:linux-x64-gnu
+bun run build:darwin-arm64
+bun run build:darwin-x64
 
 # Run the smoke test
 bun tests/test.ts
@@ -141,13 +149,15 @@ bun tests/test.ts
 # Type-check (tsconfig has noEmit: true)
 bunx tsc --noEmit
 
-# Scaffold npm/<triple>/ sub-package directories (gitignored)
+# Re-render npm/<triple>/{README.md,package.json} from napi templates.
+# Only needed when the napi-rs template itself changes — these files
+# are git-tracked, so this overwrites curated content.
 bun run create-npm-dirs
 
 # Stage binaries into npm/<triple>/ for publish
 bun run artifacts
 
-# One-shot: build → scaffold → stage (what `npm publish` runs via prepublishOnly)
+# What `npm publish` runs before uploading — just `artifacts`.
 bun run prepublishOnly
 ```
 
