@@ -81,11 +81,15 @@ jobs:
             - name: Install dependencies
               run: bun install
 
+            - name: Build (${{ matrix.triple }})
+              # Must run before typecheck: `napi build` regenerates
+              # `index.d.ts` (gitignored), and `tests/test.ts` imports
+              # `'../index'` — typecheck needs the freshly-emitted
+              # type declarations to resolve.
+              run: npx napi build --platform --esm --release --target ${{ matrix.target }}
+
             - name: Typecheck
               run: bunx tsc --noEmit
-
-            - name: Build (${{ matrix.triple }})
-              run: npx napi build --platform --esm --release --target ${{ matrix.target }}
 
             - name: Smoke test (host)
               # Compiles tests/fixtures/hello.typ with the freshly-built
