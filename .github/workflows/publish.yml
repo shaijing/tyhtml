@@ -40,6 +40,12 @@ jobs:
     # One runner per target triple. Each builds only the binary it's
     # capable of producing, then uploads it as an artifact named after
     # the triple so the publish job can collect them all.
+    #
+    # `host: true` marks the matrix entry whose triple matches the
+    # runner's native target — those skip `--cross-compile` and run
+    # the plain `bun run build` (faster toolchain setup, no false
+    # cross-flag in logs). Only `darwin-x64` on `macos-latest` is a
+    # true cross-build (macos-latest is arm64 hardware).
     build:
         name: build (${{ matrix.triple }})
         strategy:
@@ -47,17 +53,17 @@ jobs:
             matrix:
                 include:
                     - os: ubuntu-latest
-                      target: x86_64-unknown-linux-gnu
                       triple: linux-x64-gnu
+                      host: true
                     - os: windows-latest
-                      target: x86_64-pc-windows-msvc
                       triple: win32-x64-msvc
+                      host: true
                     - os: macos-latest
-                      target: aarch64-apple-darwin
                       triple: darwin-arm64
+                      host: true
                     - os: macos-latest
-                      target: x86_64-apple-darwin
                       triple: darwin-x64
+                      host: false
         runs-on: ${{ matrix.os }}
         steps:
             - uses: actions/checkout@v4
@@ -87,7 +93,11 @@ jobs:
               # `index.d.ts` (gitignored), and `tests/test.ts` imports
               # `'../index'` — typecheck needs the freshly-emitted
               # type declarations to resolve.
-              run: bun run build:${{ matrix.triple }}
+              #
+              # `bun run build` (no suffix) for host entries — those
+              # match the runner's native target. `bun run build:<triple>`
+              # (which adds `--cross-compile`) for the one cross entry.
+              run: ${{ matrix.host && 'bun run build' || format('bun run build:{0}', matrix.triple) }}
 
             - name: Typecheck
               run: bunx tsc --noEmit
