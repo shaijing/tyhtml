@@ -4,10 +4,14 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{Context, Result};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use typst::diag::{FileError, FileResult, Warned};
+use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic, Warned};
 use typst::foundations::{Bytes, Datetime, Duration, Label, Repr, Value};
 use typst::introspection::Introspector;
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+// `WorldExt` lives in `typst::foundations` but is re-exported from the
+// crate root only in 0.15+. Importing via the crate root keeps the
+// dependency on a specific module-version bump out of the way.
+use typst::WorldExt;
 use typst::text::{Font, FontBook, FontInfo};
 use typst::utils::LazyHash;
 use typst::{Feature, Features, Library, LibraryExt, World};
@@ -108,16 +112,54 @@ pub struct CompileWarning {
     pub message: String,
 }
 
-/// Result of a successful compilation.
+/// Severity of a [`CompileDiagnostic`]. The variants are lowercase on
+/// purpose: `#[napi(string_enum)]` emits the variant name verbatim as
+/// the JS string, and the public TS API uses `'warning' | 'error'`
+/// (per the feature roadmap). Rust convention would have these
+/// `PascalCase` — override that here so the wire format matches.
+#[allow(non_camel_case_types)]
+#[napi(string_enum)]
+pub enum CompileDiagnosticSeverity {
+    warning,
+    error,
+}
+
+/// A single warning or error from the Typst compile pipeline, with
+/// structured location info where Typst can supply it.
 ///
-/// `metadata` is a JSON-encoded string (e.g. `'{"title":"..."}'`).
-/// It is `null` when no `<meta>` label is present in the document,
-/// or when `noMetadata: true` is passed. Call `JSON.parse(result.metadata)`
-/// on the JS side if you need an object.
+/// The location fields (`file`, `line`, `column`) are optional —
+/// Typst emits synthetic diagnostics for things like "html export
+/// is under active development" that have no source span.
+/// `severity` distinguishes warnings (non-fatal) from errors
+/// (compile halted, `html` will be empty).
+#[napi(object)]
+pub struct CompileDiagnostic {
+    pub severity: CompileDiagnosticSeverity,
+    pub message: String,
+    /// Absolute path of the file the diagnostic originates from, if
+    /// the span resolves to a real source file. Currently only the
+    /// main input file is recognised — package / import files are
+    /// reported without `file` / `line` / `column`.
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// Result of a compilation attempt.
+///
+/// `html` is the rendered output, or an empty string if the compile
+/// halted (errors are then in `diagnostics` with `severity: 'error'`).
+/// `metadata` is a JSON-encoded string (e.g. `'{"title":"..."}'`);
+/// `null` when no `<meta>` label is present or `noMetadata: true` was
+/// passed. `diagnostics` is the full list of warnings and errors with
+/// structured span info. `warnings` is kept for backwards compat and
+/// is the message-only projection of the `severity: 'warning'`
+/// entries from `diagnostics`.
 #[napi(object)]
 pub struct CompileResult {
     pub html: String,
     pub metadata: Option<String>,
+    pub diagnostics: Vec<CompileDiagnostic>,
     pub warnings: Vec<CompileWarning>,
 }
 
@@ -160,6 +202,10 @@ impl CompileOptions {
 
 struct BridgeFiles {
     main: FileId,
+    /// Absolute path of the main input file. Kept alongside `main`
+    /// (the FileId) so diagnostic builders can surface the original
+    /// path on the JS side without re-canonicalising.
+    main_path: PathBuf,
     project: FsRoot,
 }
 
@@ -174,6 +220,7 @@ impl BridgeFiles {
 
         Ok(Self {
             main,
+            main_path: main_abs,
             project: FsRoot::new(root),
         })
     }
@@ -383,7 +430,76 @@ fn extract_body(html: &str) -> &str {
     }
 }
 
-// ── TyHtml class ───────────────────────────────────────────────────────
+// ── Diagnostic extraction ──────────────────────────────────────────────
+
+/// Build a JS-facing [`CompileDiagnostic`] from a Typst
+/// [`SourceDiagnostic`], resolving the span through the world.
+///
+/// Location fields are populated only when the span resolves to the
+/// main input file. Spans in `#import`ed or package files are
+/// reported as message-only for now — plumbing paths for those
+/// would need either a `path: FileId -> PathBuf` map on
+/// `BridgeFiles` or a custom `FileLoader` that records the mapping.
+/// Per the roadmap: "Some diagnostics may not have file/span
+/// information. The API should allow missing fields."
+///
+/// We only expose `file` / `line` / `column` (no `range` for now) —
+/// that's enough to make build tools log clickable errors and CI logs
+/// useful, without the WorldExt::range plumbing.
+fn diagnostic_from_source(
+    diag: &SourceDiagnostic,
+    world: &BridgeWorld,
+) -> Option<CompileDiagnostic> {
+    let severity = match diag.severity {
+        Severity::Warning => CompileDiagnosticSeverity::warning,
+        Severity::Error => CompileDiagnosticSeverity::error,
+    };
+
+    let file_id = diag.span.id();
+
+    let (file, line, column) = match file_id {
+        Some(fid) if fid == world.files.loader().main => {
+            // WorldExt::range returns the full byte range; we use
+            // `range.start` for the diagnostic location. Detached
+            // spans (synthetic diagnostics) return `None` from
+            // `range` even if `id()` returns Some, so the inner
+            // match handles that case too.
+            let source = world.source(fid).ok();
+            let byte_offset = world.range(diag.span).map(|r| r.start);
+            match (source, byte_offset) {
+                (Some(src), Some(off)) => {
+                    // `Source::lines().byte_to_line_column()` does
+                    // the byte → (line, column) conversion using
+                    // typst's own line table — no need to scan the
+                    // source ourselves. Both values are 1-indexed.
+                    let (l, c) = src.lines().byte_to_line_column(off).unwrap_or((1, 1));
+                    (
+                        Some(
+                            world
+                                .files
+                                .loader()
+                                .main_path
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        Some(l as u32),
+                        Some(c as u32),
+                    )
+                }
+                _ => (None, None, None),
+            }
+        }
+        _ => (None, None, None),
+    };
+
+    Some(CompileDiagnostic {
+        severity,
+        message: diag.message.to_string(),
+        file,
+        line,
+        column,
+    })
+}
 
 /// Long-lived Typst compilation engine.
 ///
@@ -509,20 +625,58 @@ impl TyHtml {
 /// Run the full compile pipeline against an already-built `BridgeWorld`.
 /// Pulled out of the JS entry points so the async / sync methods share
 /// the same Typst invocation.
+///
+/// Diagnostics policy:
+///   * All Typst warnings are collected into `diagnostics` (severity:
+///     `Warning`) and projected message-only into `warnings` for
+///     backwards compat.
+///   * Compile errors are also surfaced through `diagnostics`
+///     (severity: `Error`) and **the function returns `Ok` with
+///     `html = ""`** — the caller is expected to inspect
+///     `diagnostics` and react. `run_compile_with_world` only
+///     returns `Err` for non-Typst failures (HTML export crash,
+///     internal panic). This lets JS consumers distinguish "Typst
+///     said no" from "the addon broke".
 fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result<CompileResult> {
     let Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
 
-    let warnings: Vec<CompileWarning> = warnings
+    // Build structured diagnostics for every warning. Filter out the
+    // `Comparison` severity (typst's internal incremental annotation)
+    // — the helper returns None for those.
+    let mut diagnostics: Vec<CompileDiagnostic> = warnings
         .iter()
-        .map(|w| CompileWarning {
-            message: w.message.to_string(),
+        .filter_map(|w| diagnostic_from_source(w, &world))
+        .collect();
+
+    // Project message-only warnings for the legacy `warnings` field.
+    let warnings_msgs: Vec<CompileWarning> = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, CompileDiagnosticSeverity::warning))
+        .map(|d| CompileWarning {
+            message: d.message.clone(),
         })
         .collect();
 
-    let document = output.map_err(|errors| {
-        let msgs: Vec<String> = errors.iter().map(|e| e.message.to_string()).collect();
-        anyhow::anyhow!("Compilation failed:\n{}", msgs.join("\n"))
-    })?;
+    let document = match output {
+        Ok(doc) => doc,
+        Err(errors) => {
+            // Compile halted — surface the errors through diagnostics
+            // and bail with an empty HTML rather than throwing. The
+            // existing `warnings` field stays empty (errors aren't
+            // warnings).
+            for e in &errors {
+                if let Some(diag) = diagnostic_from_source(e, &world) {
+                    diagnostics.push(diag);
+                }
+            }
+            return Ok(CompileResult {
+                html: String::new(),
+                metadata: None,
+                diagnostics,
+                warnings: vec![],
+            });
+        }
+    };
 
     let html_options = HtmlOptions {
         pretty: opts.pretty,
@@ -545,6 +699,7 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
     Ok(CompileResult {
         html: html_final,
         metadata,
-        warnings,
+        diagnostics,
+        warnings: warnings_msgs,
     })
 }
