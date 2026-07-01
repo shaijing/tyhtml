@@ -30,11 +30,10 @@ for (const d of result.diagnostics) {
         : '<no location>'
     console.log(`  [${d.severity}] ${loc}  ${d.message}`)
 }
-// `warnings` is the message-only projection of severity=warning entries
-// from `diagnostics`. Kept here for backwards-compat coverage.
-console.log(`Warnings (legacy field): ${result.warnings.length}`)
-if (result.warnings.length > 0) {
-    for (const w of result.warnings) console.log(`  - ${w.message}`)
+const warnings = result.diagnostics.filter((d) => d.severity === 'warning')
+console.log(`Warnings (filtered from diagnostics): ${warnings.length}`)
+if (warnings.length > 0) {
+    for (const w of warnings) console.log(`  - ${w.message}`)
 }
 
 // Exercise compileSync on the same instance to confirm the cache is

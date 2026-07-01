@@ -34,8 +34,9 @@ const engine = new TyHtml()
 // Warm pass — primes the OnceLock caches inside the TyHtml struct.
 {
     const r = await engine.compile(FIXTURE, { pretty: false })
-    if (r.warnings.length !== 1) {
-        throw new Error(`warm pass produced ${r.warnings.length} warnings, expected 1`)
+    const warmWarnings = r.diagnostics.filter((d) => d.severity === 'warning').length
+    if (warmWarnings !== 1) {
+        throw new Error(`warm pass produced ${warmWarnings} warnings, expected 1`)
     }
 }
 

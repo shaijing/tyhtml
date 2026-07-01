@@ -106,12 +106,6 @@ pub struct CompileOptions {
     pub font_paths: Option<Vec<String>>,
 }
 
-/// A single Typst warning emitted during compilation.
-#[napi(object)]
-pub struct CompileWarning {
-    pub message: String,
-}
-
 /// Severity of a [`CompileDiagnostic`]. The variants are lowercase on
 /// purpose: `#[napi(string_enum)]` emits the variant name verbatim as
 /// the JS string, and the public TS API uses `'warning' | 'error'`
@@ -152,15 +146,13 @@ pub struct CompileDiagnostic {
 /// `metadata` is a JSON-encoded string (e.g. `'{"title":"..."}'`);
 /// `null` when no `<meta>` label is present or `noMetadata: true` was
 /// passed. `diagnostics` is the full list of warnings and errors with
-/// structured span info. `warnings` is kept for backwards compat and
-/// is the message-only projection of the `severity: 'warning'`
-/// entries from `diagnostics`.
+/// structured span info — consumers filter by `severity` if they need
+/// just the warning subset.
 #[napi(object)]
 pub struct CompileResult {
     pub html: String,
     pub metadata: Option<String>,
     pub diagnostics: Vec<CompileDiagnostic>,
-    pub warnings: Vec<CompileWarning>,
 }
 
 /// Compile options with all `Option`s resolved to concrete values.
@@ -648,22 +640,11 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
         .filter_map(|w| diagnostic_from_source(w, &world))
         .collect();
 
-    // Project message-only warnings for the legacy `warnings` field.
-    let warnings_msgs: Vec<CompileWarning> = diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, CompileDiagnosticSeverity::warning))
-        .map(|d| CompileWarning {
-            message: d.message.clone(),
-        })
-        .collect();
-
     let document = match output {
         Ok(doc) => doc,
         Err(errors) => {
             // Compile halted — surface the errors through diagnostics
-            // and bail with an empty HTML rather than throwing. The
-            // existing `warnings` field stays empty (errors aren't
-            // warnings).
+            // and bail with an empty HTML rather than throwing.
             for e in &errors {
                 if let Some(diag) = diagnostic_from_source(e, &world) {
                     diagnostics.push(diag);
@@ -673,7 +654,6 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
                 html: String::new(),
                 metadata: None,
                 diagnostics,
-                warnings: vec![],
             });
         }
     };
@@ -700,6 +680,5 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
         html: html_final,
         metadata,
         diagnostics,
-        warnings: warnings_msgs,
     })
 }
