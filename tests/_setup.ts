@@ -1,11 +1,6 @@
-// Shared test setup. The `TyHtml` cold start (system font discovery +
-// Library build) is expensive enough that running it once per test file
-// is wasteful; the two test files import `createEngine` from here so the
-// whole smoke run only pays for it once.
+// Shared test setup. Module caching keeps the expensive TyHtml cold start
+// to one instance for the complete test run.
 import { TyHtml } from '../index'
 
-export function createEngine(): TyHtml {
-    // Constructor = cold start. We don't pass `fontPaths` here — the
-    // smoke tests only exercise the system font set.
-    return new TyHtml()
-}
+// Module caching makes this a single cold start for the complete test run.
+export const engine = new TyHtml()

@@ -95,24 +95,27 @@ npm run build:darwin-x64
 ## Tests
 
 ```bash
-bun tests/test.ts
-# → compiles tests/fixtures/hello.typ and prints the HTML + metadata
+bun run test
+bun run typecheck
 ```
 
 ## Publishing
 
 ```bash
-# 1. Build for every supported target and scaffold the npm/ scoped sub-packages
-npm run prepublishOnly
+# 1. Build every supported target on its matching host/CI runner
+# 2. Stage the resulting .node binaries under npm/<triple>/
+bun run artifacts
 
-# 2. Login (one-time)
+# 3. Login (one-time, not needed for the trusted-publisher workflow)
 npm login
 
-# 3. Publish root + each scoped sub-package
-npx napi pre-publish
+# 4. Publish each npm/<triple> platform package, then the root package.
+# Repeat the subshell command for all four triple directories.
+(cd npm/linux-x64-gnu && npm publish)
+npm publish
 ```
 
-`napi pre-publish` iterates over every target in `napi.targets` (Windows x64, Linux x64, Darwin arm64, Darwin x64), publishes the corresponding `@isomtop/tyhtml-{triple}` package, then publishes the root package which lists them all under `optionalDependencies`. Consumers get the right binary for their platform automatically.
+The normal release path is the `publish.yml` trusted-publisher workflow triggered by a matching `v*` tag. It builds all four native targets, verifies the tag against `package.json`, stages every binary, and publishes the platform packages before the root package.
 
 ## License
 

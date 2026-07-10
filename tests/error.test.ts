@@ -1,47 +1,30 @@
-// Smoke test for the error path: a deliberately broken .typ file
-// (type error: `let x: int = "not a number"`) should produce an
-// empty `html` and at least one diagnostic with severity='error',
-// file matching the main fixture, and populated line/column.
-//
-// Run:  bun tests/error.test.ts
+import { expect, test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
-import { createEngine } from './_setup'
+import { engine } from './_setup'
 
 const errorFixture = fileURLToPath(new URL('./fixtures/error.typ', import.meta.url))
+const importedFixture = fileURLToPath(new URL('./fixtures/imported-main.typ', import.meta.url))
 
-const engine = createEngine()
+test('compile errors contain an exact one-based source location', async () => {
+    const result = await engine.compile(errorFixture, { pretty: true })
+    const fixtureBasename = errorFixture.split(/[\\/]/).pop()!
+    const diagnostic = result.diagnostics.find(
+        (item) => item.severity === 'error' && item.file?.endsWith(fixtureBasename),
+    )
 
-console.log('─'.repeat(60))
-console.log('Error fixture:')
-const errorResult = await engine.compile(errorFixture, { pretty: true })
+    expect(result.html).toBe('')
+    expect(diagnostic).toBeDefined()
+    expect(diagnostic?.line).toBe(8)
+    expect(diagnostic?.column).toBe(7)
+})
 
-// Print every diagnostic so a regression shows the actual surface.
-for (const d of errorResult.diagnostics) {
-    const loc = d.file
-        ? `${d.file}:${d.line ?? '?'}:${d.column ?? '?'}`
-        : '<no location>'
-    console.log(`  [${d.severity}] ${loc}  ${d.message}`)
-}
-const errorDiags = errorResult.diagnostics.filter((d) => d.severity === 'error')
-console.log(`  diagnostics: ${errorResult.diagnostics.length}`)
-console.log(`  errors: ${errorDiags.length}`)
+test('diagnostics resolve locations in imported project files', async () => {
+    const result = await engine.compile(importedFixture)
+    const diagnostic = result.diagnostics.find(
+        (item) => item.severity === 'error' && item.file?.endsWith('imported-error.typ'),
+    )
 
-// Sanity checks — throw on any failure so the test process exits
-// non-zero instead of just logging a problem.
-if (errorResult.html !== '') {
-    throw new Error(`error fixture: expected html='' but got ${errorResult.html.length} bytes`)
-}
-if (errorDiags.length === 0) {
-    throw new Error('error fixture: expected at least one severity=error diagnostic')
-}
-const fixtureBasename = errorFixture.split(/[\\/]/).pop()!
-const mainError = errorDiags.find(
-    (d) => d.file !== undefined && d.file!.endsWith(fixtureBasename),
-)
-if (!mainError) {
-    throw new Error(`error fixture: expected at least one diagnostic with the main fixture path (${fixtureBasename})`)
-}
-if (mainError.line === undefined || mainError.column === undefined) {
-    throw new Error('error fixture: expected main diagnostic to have line/column populated')
-}
-console.log('  ✓ all error-path assertions passed')
+    expect(diagnostic).toBeDefined()
+    expect(diagnostic?.line).toBe(1)
+    expect(diagnostic?.column).toBe(7)
+})

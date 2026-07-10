@@ -4,14 +4,17 @@
   "workspaces": {
     "": {
       "name": "tyhtml",
-      "dependencies": {
-        "@napi-rs/cli": "^3.7.2",
-      },
       "devDependencies": {
+        "@napi-rs/cli": "^3.7.2",
+        "@napi-rs/cross-toolchain": "^1.0.0",
         "@types/bun": "latest",
+        "typescript": "^5.9.3",
       },
-      "peerDependencies": {
-        "typescript": "^5",
+      "optionalDependencies": {
+        "@isomtop/tyhtml-darwin-arm64": "0.1.2",
+        "@isomtop/tyhtml-darwin-x64": "0.1.2",
+        "@isomtop/tyhtml-linux-x64-gnu": "0.1.2",
+        "@isomtop/tyhtml-win32-x64-msvc": "0.1.2",
       },
     },
   },
@@ -53,6 +56,14 @@
     "@inquirer/select": ["@inquirer/select@5.2.1", "https://registry.npmmirror.com/@inquirer/select/-/select-5.2.1.tgz", { "dependencies": { "@inquirer/ansi": "^2.0.7", "@inquirer/core": "^11.2.1", "@inquirer/figures": "^2.0.7", "@inquirer/type": "^4.0.7" }, "peerDependencies": { "@types/node": ">=18" }, "optionalPeers": ["@types/node"] }, "sha512-FlDndEUww8m7BfukO2nJa25vhD+H5jxxCv4oGioKqzyWz3nPHhhw4LKdYRSlXuAx7DsdWia7iyaBPKKS95Evfw=="],
 
     "@inquirer/type": ["@inquirer/type@4.0.7", "https://registry.npmmirror.com/@inquirer/type/-/type-4.0.7.tgz", { "peerDependencies": { "@types/node": ">=18" }, "optionalPeers": ["@types/node"] }, "sha512-t28inv14nMQ1PhKpsJPY+kEs/c00qzeCOS2gTNRyTjG5d6qsVA2fItxW4hkvGZ5lvanGLdtCzVIx5dwdRpN1+g=="],
+
+    "@isomtop/tyhtml-darwin-arm64": ["@isomtop/tyhtml-darwin-arm64@0.1.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-bvJKpuzpwr5TiMOA93Mr8u53XRtqu+8BNfgb6+R5ZYLdSecy/J03v/oNonvK97mzfHvFchA//cpTCBW0YSkl8g=="],
+
+    "@isomtop/tyhtml-darwin-x64": ["@isomtop/tyhtml-darwin-x64@0.1.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-LEhvHEjpwX9/kNBV8xTFRyAG63y3dpE01kn8OiheKSt7RVR/B0uGXjLf/WYKfs7BC1Y+gtYGz8aHfmigue+s+g=="],
+
+    "@isomtop/tyhtml-linux-x64-gnu": ["@isomtop/tyhtml-linux-x64-gnu@0.1.2", "", { "os": "linux", "cpu": "x64" }, "sha512-sSwd76d7nNx6v51aKymv1SvJmhPPpJmrKKNLCFuSx9QLKEmbyfRcuxGKevvvCdDowyUj0wfwjFZaLEXZoIoRjg=="],
+
+    "@isomtop/tyhtml-win32-x64-msvc": ["@isomtop/tyhtml-win32-x64-msvc@0.1.2", "", { "os": "win32", "cpu": "x64" }, "sha512-Xt+2loUVe4OMAP8gY4KKduE8vZeFlizuMmiEE7QEGQR8QMpOFcpuT/c8zi8bMyyn06ucaSmY3fo9Bxaa6NSuzg=="],
 
     "@napi-rs/cli": ["@napi-rs/cli@3.7.2", "https://registry.npmmirror.com/@napi-rs/cli/-/cli-3.7.2.tgz", { "dependencies": { "@inquirer/prompts": "^8.5.2", "@napi-rs/cross-toolchain": "^1.0.3", "@napi-rs/wasm-tools": "^1.0.1", "@octokit/rest": "^22.0.1", "clipanion": "^4.0.0-rc.4", "colorette": "^2.0.20", "emnapi": "^1.11.1", "es-toolkit": "^1.47.0", "js-yaml": "^4.2.0", "obug": "^2.1.2", "semver": "^7.8.2", "typanion": "^3.14.0" }, "peerDependencies": { "@emnapi/runtime": "^1.7.1" }, "optionalPeers": ["@emnapi/runtime"], "bin": { "napi": "dist/cli.js", "napi-raw": "cli.mjs" } }, "sha512-shDW0Td/XZQpP04Yy+OsMt1ILMKGGkoLcy1zVAsSAK0fLfWm0Upgkmfs/NOV2ZhMQwkgpR3ZEdyHmTwgrUDQuA=="],
 

@@ -1,44 +1,38 @@
-// Smoke test for the success path: hello.typ compiles cleanly to HTML,
-// exposes a metadata label, and produces one warning (the synthetic
-// "html export is under active development" diagnostic from typst itself).
-//
-// Run:  bun tests/success.test.ts
+import { expect, test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
-import { createEngine } from './_setup'
+import { engine } from './_setup'
 
 const fixture = fileURLToPath(new URL('./fixtures/hello.typ', import.meta.url))
 
-const engine = createEngine()
+test('compile returns HTML, metadata, and structured warnings', async () => {
+    const result = await engine.compile(fixture, { pretty: true })
 
-const result = await engine.compile(fixture, {
-    bodyOnly: false,
-    pretty: true,
+    expect(result.html).toStartWith('<!DOCTYPE html>')
+    expect(JSON.parse(result.metadata!)).toEqual({
+        date: '2026-06-28',
+        draft: false,
+        tags: ['test', 'napi-rs', 'tyhtml'],
+        title: 'Hello from typst',
+    })
+    expect(result.diagnostics.some((d) => d.severity === 'warning')).toBeTrue()
 })
 
-console.log('─'.repeat(60))
-console.log('HTML (first 400 chars):')
-console.log(result.html.slice(0, 400))
-console.log('─'.repeat(60))
-console.log('Metadata:')
-console.log(result.metadata)
-if (result.metadata) console.log(JSON.parse(result.metadata))
-console.log('─'.repeat(60))
-console.log(`Diagnostics: ${result.diagnostics.length}`)
-for (const d of result.diagnostics) {
-    const loc = d.file
-        ? `${d.file}:${d.line ?? '?'}:${d.column ?? '?'}`
-        : '<no location>'
-    console.log(`  [${d.severity}] ${loc}  ${d.message}`)
-}
-const warnings = result.diagnostics.filter((d) => d.severity === 'warning')
-console.log(`Warnings (filtered from diagnostics): ${warnings.length}`)
-if (warnings.length > 0) {
-    for (const w of warnings) console.log(`  - ${w.message}`)
-}
+test('compileSync matches the async result', async () => {
+    const asyncResult = await engine.compile(fixture, { pretty: true })
+    const syncResult = engine.compileSync(fixture, { pretty: true })
 
-// Exercise compileSync on the same instance to confirm the cache is
-// shared across both entry points.
-const syncResult = engine.compileSync(fixture, { pretty: true })
-console.log('─'.repeat(60))
-console.log(`compileSync html length matches compile: ${syncResult.html.length === result.html.length}`)
-console.log(`compileSync diagnostics matches compile: ${syncResult.diagnostics.length === result.diagnostics.length}`)
+    expect(syncResult).toEqual(asyncResult)
+})
+
+test('bodyOnly and noMetadata honor their output contracts', async () => {
+    const result = await engine.compile(fixture, {
+        bodyOnly: true,
+        noMetadata: true,
+    })
+
+    expect(result.html).not.toContain('<!DOCTYPE')
+    expect(result.html).not.toContain('<body')
+    expect(result.html).toContain('Hello from typst')
+    expect(Object.hasOwn(result, 'metadata')).toBeFalse()
+    expect(result.metadata).toBeUndefined()
+})

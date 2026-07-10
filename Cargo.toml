@@ -1,6 +1,6 @@
 [package]
 name = "tyhtml"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 
 [lib]
@@ -24,5 +24,4 @@ napi-build = "2.3.2"
 opt-level = 3        # optimize for speed (was "z" — size); see bench/run.ts
 lto = "fat"          # full link-time optimization across crates
 codegen-units = 1    # single codegen unit → better optimization
-panic = "abort"      # drop unwinding tables
 strip = true         # strip symbols (debug info + names)

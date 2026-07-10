@@ -95,24 +95,27 @@ npm run build:darwin-x64
 ## 测试
 
 ```bash
-bun tests/test.ts
-# → 编译 tests/fixtures/hello.typ 并打印 HTML + 元数据
+bun run test
+bun run typecheck
 ```
 
 ## 发布
 
 ```bash
-# 1. 为所有支持的目标构建,并生成 npm/ 下的 scoped 子包
-npm run prepublishOnly
+# 1. 在匹配的主机或 CI runner 上构建所有支持的目标
+# 2. 将生成的 .node 文件放入 npm/<triple>/
+bun run artifacts
 
-# 2. 登录(一次性)
+# 3. 登录（Trusted Publisher workflow 不需要手动登录）
 npm login
 
-# 3. 发布根包以及每个 scoped 子包
-npx napi pre-publish
+# 4. 依次发布 npm/<triple> 下的平台子包，最后发布根包
+# 对四个平台目录分别执行下面的子 shell 命令
+(cd npm/linux-x64-gnu && npm publish)
+npm publish
 ```
 
-`napi pre-publish` 会遍历 `napi.targets` 中的每个目标(Windows x64、Linux x64、Darwin arm64、Darwin x64),发布对应的 `@isomtop/tyhtml-{triple}` 子包,然后发布根包(根包在 `optionalDependencies` 中列出所有子包)。消费方会自动获取与平台匹配的二进制。
+常规发布路径是由匹配 `v*` tag 触发的 `publish.yml` Trusted Publisher workflow。它会构建四个平台目标、校验 tag 与 `package.json` 版本、放置全部二进制文件，并先发布平台子包，最后发布根包。
 
 ## 许可证
 

@@ -59,6 +59,7 @@ impl FontSource for CachedFontPath {
 }
 
 static SYSTEM_FONT_ENTRIES: OnceLock<Vec<(CachedFontPath, FontInfo)>> = OnceLock::new();
+static COMPILE_SEMAPHORE: OnceLock<Arc<napi::tokio::sync::Semaphore>> = OnceLock::new();
 
 fn library() -> &'static LazyHash<Library> {
     LIBRARY.get_or_init(|| {
@@ -72,6 +73,15 @@ fn system_font_entries() -> &'static [(CachedFontPath, FontInfo)] {
         typst_kit::fonts::system()
             .map(|(p, i)| (CachedFontPath(Arc::new(p)), i))
             .collect()
+    })
+}
+
+fn compile_semaphore() -> &'static Arc<napi::tokio::sync::Semaphore> {
+    COMPILE_SEMAPHORE.get_or_init(|| {
+        let permits = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1);
+        Arc::new(napi::tokio::sync::Semaphore::new(permits))
     })
 }
 
@@ -131,9 +141,7 @@ pub struct CompileDiagnostic {
     pub severity: CompileDiagnosticSeverity,
     pub message: String,
     /// Absolute path of the file the diagnostic originates from, if
-    /// the span resolves to a real source file. Currently only the
-    /// main input file is recognised — package / import files are
-    /// reported without `file` / `line` / `column`.
+    /// the span resolves to a real project or package file.
     pub file: Option<String>,
     pub line: Option<u32>,
     pub column: Option<u32>,
@@ -144,7 +152,7 @@ pub struct CompileDiagnostic {
 /// `html` is the rendered output, or an empty string if the compile
 /// halted (errors are then in `diagnostics` with `severity: 'error'`).
 /// `metadata` is a JSON-encoded string (e.g. `'{"title":"..."}'`);
-/// `null` when no `<meta>` label is present or `noMetadata: true` was
+/// omitted when no `<meta>` label is present or `noMetadata: true` was
 /// passed. `diagnostics` is the full list of warnings and errors with
 /// structured span info — consumers filter by `severity` if they need
 /// just the warning subset.
@@ -194,10 +202,6 @@ impl CompileOptions {
 
 struct BridgeFiles {
     main: FileId,
-    /// Absolute path of the main input file. Kept alongside `main`
-    /// (the FileId) so diagnostic builders can surface the original
-    /// path on the JS side without re-canonicalising.
-    main_path: PathBuf,
     project: FsRoot,
 }
 
@@ -212,9 +216,18 @@ impl BridgeFiles {
 
         Ok(Self {
             main,
-            main_path: main_abs,
             project: FsRoot::new(root),
         })
+    }
+
+    fn path(&self, id: FileId) -> Option<PathBuf> {
+        match id.root() {
+            VirtualRoot::Project => self.project.resolve(id.vpath()).ok(),
+            VirtualRoot::Package(spec) => {
+                let root = package_dir_for(spec)?;
+                id.vpath().realize(&root).ok()
+            }
+        }
     }
 }
 
@@ -378,36 +391,53 @@ impl World for BridgeWorld {
 
 // ── Metadata extraction ────────────────────────────────────────────────
 
-fn extract_metadata(document: &HtmlDocument, label_name: &str) -> Option<String> {
-    let label = Label::new(PicoStr::intern(label_name))?;
-    let content = document.introspector().query_label(label).ok()?;
-    let value = content.get_by_name("value").ok()?;
+fn extract_metadata(document: &HtmlDocument, label_name: &str) -> Result<Option<String>> {
+    let label = Label::new(PicoStr::intern(label_name))
+        .ok_or_else(|| anyhow::anyhow!("Invalid metadata label: {label_name:?}"))?;
+    let introspector = document.introspector();
+
+    match introspector.label_count(label) {
+        0 => return Ok(None),
+        1 => {}
+        count => {
+            anyhow::bail!("Metadata label {label_name:?} occurs {count} times");
+        }
+    }
+
+    let content = introspector
+        .query_label(label)
+        .map_err(|e| anyhow::anyhow!("Cannot query metadata label {label_name:?}: {e}"))?;
+    let value = content
+        .get_by_name("value")
+        .map_err(|e| anyhow::anyhow!("Metadata label {label_name:?} has no value: {e:?}"))?;
     let json = value_to_json(&value)?;
-    serde_json::to_string(&json).ok()
+    let encoded = serde_json::to_string(&json).context("Cannot serialize metadata as JSON")?;
+    Ok(Some(encoded))
 }
 
-fn value_to_json(value: &Value) -> Option<serde_json::Value> {
-    match value {
-        Value::None => None,
-        Value::Bool(b) => Some(serde_json::Value::Bool(*b)),
-        Value::Int(i) => Some(serde_json::json!(*i)),
-        Value::Float(f) => Some(serde_json::json!(*f)),
-        Value::Str(s) => Some(serde_json::json!(s.as_str())),
+fn value_to_json(value: &Value) -> Result<serde_json::Value> {
+    let json = match value {
+        Value::None => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::json!(*i),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| anyhow::anyhow!("Metadata contains a non-finite float: {f}"))?,
+        Value::Str(s) => serde_json::json!(s.as_str()),
         Value::Dict(d) => {
             let mut map = serde_json::Map::new();
             for (key, val) in d.iter() {
-                if let Some(json_val) = value_to_json(val) {
-                    map.insert(key.as_str().to_string(), json_val);
-                }
+                map.insert(key.as_str().to_string(), value_to_json(val)?);
             }
-            Some(serde_json::Value::Object(map))
+            serde_json::Value::Object(map)
         }
         Value::Array(arr) => {
-            let items: Vec<serde_json::Value> = arr.iter().filter_map(value_to_json).collect();
-            Some(serde_json::Value::Array(items))
+            let items = arr.iter().map(value_to_json).collect::<Result<Vec<_>>>()?;
+            serde_json::Value::Array(items)
         }
-        _ => Some(serde_json::json!(value.repr().as_str())),
-    }
+        _ => serde_json::json!(value.repr().as_str()),
+    };
+    Ok(json)
 }
 
 /// Strip everything outside `<body>…</body>`.
@@ -427,13 +457,9 @@ fn extract_body(html: &str) -> &str {
 /// Build a JS-facing [`CompileDiagnostic`] from a Typst
 /// [`SourceDiagnostic`], resolving the span through the world.
 ///
-/// Location fields are populated only when the span resolves to the
-/// main input file. Spans in `#import`ed or package files are
-/// reported as message-only for now — plumbing paths for those
-/// would need either a `path: FileId -> PathBuf` map on
-/// `BridgeFiles` or a custom `FileLoader` that records the mapping.
-/// Per the roadmap: "Some diagnostics may not have file/span
-/// information. The API should allow missing fields."
+/// Location fields are populated when the span resolves to a project
+/// or locally installed package file. Synthetic diagnostics remain
+/// message-only.
 ///
 /// We only expose `file` / `line` / `column` (no `range` for now) —
 /// that's enough to make build tools log clickable errors and CI logs
@@ -450,7 +476,7 @@ fn diagnostic_from_source(
     let file_id = diag.span.id();
 
     let (file, line, column) = match file_id {
-        Some(fid) if fid == world.files.loader().main => {
+        Some(fid) => {
             // WorldExt::range returns the full byte range; we use
             // `range.start` for the diagnostic location. Detached
             // spans (synthetic diagnostics) return `None` from
@@ -458,24 +484,19 @@ fn diagnostic_from_source(
             // match handles that case too.
             let source = world.source(fid).ok();
             let byte_offset = world.range(diag.span).map(|r| r.start);
-            match (source, byte_offset) {
-                (Some(src), Some(off)) => {
+            let path = world.files.loader().path(fid);
+            match (source, byte_offset, path) {
+                (Some(src), Some(off), Some(path)) => {
                     // `Source::lines().byte_to_line_column()` does
                     // the byte → (line, column) conversion using
                     // typst's own line table — no need to scan the
-                    // source ourselves. Both values are 1-indexed.
-                    let (l, c) = src.lines().byte_to_line_column(off).unwrap_or((1, 1));
+                    // source ourselves. Typst returns zero-based values;
+                    // the public API uses conventional one-based positions.
+                    let (l, c) = src.lines().byte_to_line_column(off).unwrap_or((0, 0));
                     (
-                        Some(
-                            world
-                                .files
-                                .loader()
-                                .main_path
-                                .to_string_lossy()
-                                .into_owned(),
-                        ),
-                        Some(l as u32),
-                        Some(c as u32),
+                        Some(path.to_string_lossy().into_owned()),
+                        Some((l + 1) as u32),
+                        Some((c + 1) as u32),
                     )
                 }
                 _ => (None, None, None),
@@ -559,17 +580,22 @@ impl TyHtml {
         let library = self.library;
         let base_entries = Arc::clone(&self.base_font_entries);
         let input_path = PathBuf::from(input);
+        let _permit = Arc::clone(compile_semaphore())
+            .acquire_owned()
+            .await
+            .map_err(|e| Error::from_reason(format!("compile semaphore closed: {e}")))?;
 
         napi::tokio::task::spawn_blocking(move || -> Result<CompileResult> {
+            let abs = input_path
+                .canonicalize()
+                .context("Cannot resolve input file path")?;
+
             let mut fonts = FontStore::new();
             fonts.extend(base_entries.iter().cloned());
             for path in &flat.extra_font_paths {
                 fonts.extend(typst_kit::fonts::scan(path));
             }
 
-            let abs = input_path
-                .canonicalize()
-                .context("Cannot resolve input file path")?;
             let world = BridgeWorld::from_parts(abs, library, fonts)?;
             run_compile_with_world(world, &flat)
         })
@@ -595,17 +621,18 @@ impl TyHtml {
     ) -> napi::Result<CompileResult> {
         let flat = CompileOptions::flatten_or_default(options);
 
+        let input_path = PathBuf::from(input);
+        let abs = input_path
+            .canonicalize()
+            .context("Cannot resolve input file path")
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+
         let mut fonts = FontStore::new();
         fonts.extend(self.base_font_entries.iter().cloned());
         for path in &flat.extra_font_paths {
             fonts.extend(typst_kit::fonts::scan(path));
         }
 
-        let input_path = PathBuf::from(input);
-        let abs = input_path
-            .canonicalize()
-            .context("Cannot resolve input file path")
-            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
         let world = BridgeWorld::from_parts(abs, self.library, fonts)
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
         run_compile_with_world(world, &flat).map_err(|e| Error::from_reason(format!("{e:#}")))
@@ -619,16 +646,15 @@ impl TyHtml {
 /// the same Typst invocation.
 ///
 /// Diagnostics policy:
-///   * All Typst warnings are collected into `diagnostics` (severity:
-///     `Warning`) and projected message-only into `warnings` for
-///     backwards compat.
+///   * All Typst warnings are collected into `diagnostics` with warning
+///     severity.
 ///   * Compile errors are also surfaced through `diagnostics`
 ///     (severity: `Error`) and **the function returns `Ok` with
 ///     `html = ""`** — the caller is expected to inspect
 ///     `diagnostics` and react. `run_compile_with_world` only
 ///     returns `Err` for non-Typst failures (HTML export crash,
-///     internal panic). This lets JS consumers distinguish "Typst
-///     said no" from "the addon broke".
+///     serialization failure). This lets JS consumers distinguish
+///     "Typst said no" from "the addon broke".
 fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result<CompileResult> {
     let Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
 
@@ -673,7 +699,7 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
     let metadata = if opts.no_metadata {
         None
     } else {
-        extract_metadata(&document, &opts.label_name)
+        extract_metadata(&document, &opts.label_name)?
     };
 
     Ok(CompileResult {
@@ -681,4 +707,29 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
         metadata,
         diagnostics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typst_none_maps_to_json_null() {
+        assert_eq!(
+            value_to_json(&Value::None).unwrap(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn extract_body_returns_only_inner_markup() {
+        let html = "<!DOCTYPE html><html><body class=\"doc\"><p>Hello</p></body></html>";
+        assert_eq!(extract_body(html), "<p>Hello</p>");
+    }
+
+    #[test]
+    fn extract_body_leaves_unwrapped_html_unchanged() {
+        let html = "<p>Hello</p>";
+        assert_eq!(extract_body(html), html);
+    }
 }
