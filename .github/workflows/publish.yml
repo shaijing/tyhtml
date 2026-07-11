@@ -7,7 +7,8 @@
 # toolchain on `macos-latest`, etc.). So this is a two-stage workflow:
 #
 #   1. `build` matrix: each runner builds its native .node binary and
-#      uploads it as an artifact.
+#      uploads it as an artifact. The Linux build also uploads the
+#      generated root JS/type entrypoints.
 #   2. `publish`: downloads all four artifacts, stages them into
 #      `npm/<triple>/`, then publishes every sub-package followed by
 #      the root in lockstep.
@@ -149,6 +150,21 @@ jobs:
                   if-no-files-found: error
                   retention-days: 7
 
+            - name: Upload root package entrypoints
+              # The publish job runs in a fresh checkout where generated
+              # napi files do not exist. Carry the JS wrapper and type
+              # declarations from one host build so the root package
+              # actually contains its declared main/types files.
+              if: matrix.triple == 'linux-x64-gnu'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: tyhtml-root-entrypoints
+                  path: |
+                      index.js
+                      index.d.ts
+                  if-no-files-found: error
+                  retention-days: 7
+
     # ── Aggregate + publish ────────────────────────────────────────────
     #
     # Runs after every matrix build succeeds. Downloads the four .node
@@ -207,7 +223,7 @@ jobs:
 
                   echo "all release versions match ${pkg}"
 
-            - name: Download all .node artifacts
+            - name: Download release artifacts
               uses: actions/download-artifact@v4
               with:
                   pattern: tyhtml-*
@@ -215,12 +231,11 @@ jobs:
                   merge-multiple: true
 
             - name: Stage binaries into npm/<triple>/
-              # download-artifact with merge-multiple: true extracts
-              # all artifact files flat under `artifacts/` (no
-              # per-artifact subdirectory), so the source path is just
-              # `artifacts/tyhtml.<triple>.node`. Missing any of the
-              # four aborts the publish — better to fail loudly than
-              # ship an empty sub-package.
+              # download-artifact with merge-multiple: true extracts all
+              # artifact files flat under `artifacts/`. Stage each binary
+              # into its platform package and copy the root JS/type
+              # entrypoints back to the repository root for npm publish.
+              # Missing any required file aborts the publish.
               shell: bash
               run: |
                   set -euo pipefail
@@ -236,6 +251,32 @@ jobs:
                           exit 1
                       fi
                   done
+                  for file in index.js index.d.ts; do
+                      src="artifacts/${file}"
+                      if [ -f "$src" ]; then
+                          cp "$src" "$file"
+                          echo "staged $file ($(wc -c < "$file") bytes)"
+                      else
+                          echo "::error::${src} not found"
+                          exit 1
+                      fi
+                  done
+
+            - name: Verify root package entrypoints
+              # `package.json.files` only includes generated files at the
+              # root. If they are missing here, npm will publish a package
+              # without the declared runtime entrypoint or declarations.
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  for file in index.js index.d.ts; do
+                      if [ ! -s "$file" ]; then
+                          echo "::error::${file} is missing or empty"
+                          exit 1
+                      fi
+                  done
+                  npm pack --dry-run --json > pack.json
+                  node -e "const [pack] = require('./pack.json'); const files = new Set(pack.files.map((file) => file.path)); for (const file of ['index.js', 'index.d.ts']) { if (!files.has(file)) { console.error('::error::npm pack output is missing ' + file); process.exit(1) } }"
 
             - name: Publish sub-packages + root
               # Publishes each per-platform sub-package first (the
