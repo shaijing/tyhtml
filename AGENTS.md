@@ -172,7 +172,7 @@ bun run artifacts
 npm publish
 ```
 
-The per-triple packages are versioned in lockstep with the root (`0.1.4` today) — bump all of them together when cutting a release.
+The per-triple packages are versioned in lockstep with the root (`0.1.5` today) — bump all of them together when cutting a release.
 
 ---
 
