@@ -5,9 +5,6 @@ Node.js addon (Rust + [napi-rs](https://napi.rs)) that compiles
 [Typst](https://typst.app) `.typ` files to HTML and extracts metadata
 via the `<meta>` label.
 
-If you are Claude Code, you were loaded here via `@AGENTS.md` from
-[`CLAUDE.md`](./CLAUDE.md). Everything below applies to you.
-
 ---
 
 ## 1. Project at a glance
