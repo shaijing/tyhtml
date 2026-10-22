@@ -161,6 +161,10 @@ pub struct CompileResult {
     pub html: String,
     pub metadata: Option<String>,
     pub diagnostics: Vec<CompileDiagnostic>,
+    /// Sorted, unique absolute paths accessed during this compilation,
+    /// including the main source and missing project files. Fonts and URLs
+    /// emitted without being read are excluded. Available on Typst errors too.
+    pub dependencies: Vec<String>,
 }
 
 /// Compile options with all `Option`s resolved to concrete values.
@@ -356,6 +360,19 @@ impl BridgeWorld {
             files: FileStore::new(files),
             now,
         })
+    }
+
+    /// Export accessed paths without canonicalizing: missing files and symlink
+    /// paths must remain watchable. FileStore also records failed reads.
+    fn dependencies(&mut self) -> Vec<String> {
+        let (loader, ids) = self.files.dependencies();
+        let mut paths: Vec<String> = ids
+            .filter_map(|id| loader.path(id))
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 }
 
@@ -655,7 +672,10 @@ impl TyHtml {
 ///     returns `Err` for non-Typst failures (HTML export crash,
 ///     serialization failure). This lets JS consumers distinguish
 ///     "Typst said no" from "the addon broke".
-fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result<CompileResult> {
+fn run_compile_with_world(
+    mut world: BridgeWorld,
+    opts: &FlattenedOptions,
+) -> Result<CompileResult> {
     let Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
 
     // Build structured diagnostics for every warning. Filter out the
@@ -680,6 +700,7 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
                 html: String::new(),
                 metadata: None,
                 diagnostics,
+                dependencies: world.dependencies(),
             });
         }
     };
@@ -706,6 +727,7 @@ fn run_compile_with_world(world: BridgeWorld, opts: &FlattenedOptions) -> Result
         html: html_final,
         metadata,
         diagnostics,
+        dependencies: world.dependencies(),
     })
 }
 

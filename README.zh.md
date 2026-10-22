@@ -69,6 +69,27 @@ const syncResult = engine.compileSync('path/to/file.typ', { pretty: true })
 
 完整的 API 定义见 [`index.d.ts`](./index.d.ts)(由 `src/lib.rs` 自动生成)。
 
+## 文件依赖
+
+`compile` 和 `compileSync` 均返回 `dependencies: string[]`：本轮编译实际访问过的
+文件的绝对路径，经过排序、去重。包括主文件、传递的 import/include、图片、数据文件，
+以及从已安装包中读取的文件。即使编译返回错误诊断，缺失的项目文件也会保留在列表中。
+
+```ts
+const result = await engine.compile('path/to/main.typ')
+for (const path of result.dependencies) {
+  watcher.add(path) // 注册到下游的文件监听器
+}
+```
+
+动态计算的文件路径同样可以跟踪；未执行分支、字体、仅输出到 HTML 而未读取的 URL
+不在列表中。资源路径保留符号链接；若监听器不会跟随符号链接，还需监听目标文件。
+无法解析本地目录的缺失包不会导出路径。
+
+编译成功后，用本轮列表替换旧监听集合；出现编译错误时，保留旧列表与本轮列表的并集，
+避免提前停止编译导致遗漏依赖。监听修改、创建、删除和替换；对于缺失文件，
+监听最近的已存在父目录。编译前抛出的异常（例如主文件不存在）不会返回依赖结果。
+
 ## 从源码构建
 
 依赖:

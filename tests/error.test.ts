@@ -24,6 +24,10 @@ test('diagnostics resolve locations in imported project files', async () => {
         (item) => item.severity === 'error' && item.file?.endsWith('imported-error.typ'),
     )
 
+    expect(result.dependencies).toEqual([
+        fileURLToPath(new URL('./fixtures/imported-error.typ', import.meta.url)),
+        importedFixture,
+    ].sort())
     expect(diagnostic).toBeDefined()
     expect(diagnostic?.line).toBe(1)
     expect(diagnostic?.column).toBe(7)

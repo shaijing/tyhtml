@@ -17,7 +17,7 @@ via the `<meta>` label.
 | Binary name | `tyhtml` (via `napi.binaryName`) |
 | Language | Rust (edition 2024) + a thin TS surface for tests |
 | Runtime target | Node.js ≥ 14, Bun (preferred), browsers via bundlers |
-| Native deps | `typst`, `typst-html`, `typst-kit`, `typst-utils` (all pinned to `0.15.0`) |
+| Native deps | `typst`, `typst-html`, `typst-kit`, `typst-utils` (all pinned to `0.15.1`) |
 | JS deps | `@napi-rs/cli`, `typescript` |
 | Dev dep | `@napi-rs/cross-toolchain` (cross builds via zig/osxcross) |
 | Lockfile | `bun.lock` — Bun is the preferred package manager |

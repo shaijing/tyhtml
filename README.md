@@ -69,6 +69,32 @@ const syncResult = engine.compileSync('path/to/file.typ', { pretty: true })
 
 The full API surface is in [`index.d.ts`](./index.d.ts) (auto-generated from `src/lib.rs`).
 
+## File dependencies
+
+Both compile methods return `dependencies: string[]`: sorted, unique absolute
+paths accessed during that compilation. This includes the main source, transitive
+imports/includes, images and data files, and files read from installed packages.
+Missing project files are included even when compilation returns error diagnostics.
+
+```ts
+const result = await engine.compile('path/to/main.typ')
+for (const path of result.dependencies) {
+  watcher.add(path) // register with your downstream file watcher
+}
+```
+
+The list reflects actual reads, including dynamically computed paths; unused
+branches, fonts, and URLs emitted into HTML without being read are excluded.
+Paths preserve resource symlinks rather than resolving their targets. If your
+watcher does not follow symlinks, also watch their targets. Missing packages whose
+local directory cannot be resolved are omitted.
+
+On success, replace the previous watch set. On compile errors, retain the union
+of previous and newly discovered dependencies because compilation may stop early.
+Watch creation, deletion and replacement as well as edits; for missing files,
+watch their nearest existing parent directory. Errors thrown before compilation
+(such as a missing main input) do not return a dependency result.
+
 ## Building from source
 
 Requires:
